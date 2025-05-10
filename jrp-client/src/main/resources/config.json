@@ -6,7 +6,7 @@
       "name": "测试",
       "type": "HTTP",
       "remote_port": 8081,
-      "proxy_pass": "http://127.0.0.1:10086"
+      "proxy_pass": "http://127.0.0.1:10010"
     }
   ]
 }
