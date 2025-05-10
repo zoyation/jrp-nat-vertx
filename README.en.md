@@ -1,8 +1,7 @@
-# jrp-nat-vertx
+# java-proxy
 
 #### Description
-基于vert.x开发的跨平台的内网穿透工具（jrp-server+jrp-Client），服务中转方式实现。
-
+用java相关技术框架实现跨平台的代理功能
 
 #### Software Architecture
 Software architecture description

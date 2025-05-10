@@ -1,0 +1,49 @@
+vertx:
+  jrp:
+    #配置文件存储方式
+    config-store-type: file
+    #是否注册到内网穿透代理服务器
+    register-to-server: true
+    #内网穿透代理服务注册地址
+    register-address: 127.0.0.1:2000
+    #内网穿透代理服务注册断线重连次数
+    reconnection-times: 600
+    #内网穿透验证信息
+    token: 2023202
+# 日志配置
+logging:
+  level:
+    root: info
+    # web日志
+    org.springframework.web: error
+    # security 日志
+    org.springframework.security: error
+    # mybatis日志
+    com.tony.jrp: info
+  charset:
+    # 输出控制台编码
+    console: UTF-8
+    # 输出文件编码
+    file: UTF-8
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} ｜ %-5level ｜ %thread ｜ %logger{50} : %line ｜ %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} ｜ %-5level ｜ %thread ｜ %logger{50} : %line ｜ %msg%n"
+  # 输出文件名及路径，不配置则不输出文件
+  file:
+    # 切记，该文件表示正在产出日志的日志文件。并不会打包，当文件大于max-file-size,会根据file-name-pattern格式打包
+    # 名称为log/jrp.log文件夹会在项目根目录下，打包后会在启动包同目录下；名称为/log/jrp.log的文件夹会在项目所在磁盘的跟目录下
+    name: log/jrp.log
+  logback:
+    rollingpolicy:
+      clean-history-on-start: true
+      # 单文件的大小，默认10M, 超过之后打包成一个日志文件
+      max-file-size: 1MB
+      # 所有日志最大空间
+      total-size-cap: 2GB
+      # 日志保存的天数
+      max-history: 30
+      # 打包文件格式,默认： ${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz,书写格式为：文件路径/文件名.%i.文件后缀,其中%i不可省去，否则无日志显示
+      # 例如： 日期为：2021/11/5 ,则打包文件之后为： log/jrp.2021-11-05.0.gz,0表示日志的第一部分，后续就是，1,2,3...
+      # 如果是压缩包，里面会多一个名log/jrp.2021-11-05.0的日志文件
+      # 如下面的例子，打包之后为: log/2021-11/jrp.2020-11-5.0.log，这是一个日志文件
+      file-name-pattern: log/%d{yyyy-MM}/jrp.%d{yyyy-MM-dd}.%i.log
