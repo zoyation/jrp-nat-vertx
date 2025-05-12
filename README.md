@@ -43,7 +43,7 @@ Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理�
         token: 2023202
     ```
 
-3. 修改内网穿透客户端穿透代理配置参数config.json，通过java -jar jrp-client-1.0-SNAPSHOT.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
+3. 修改内网穿透客户端穿透代理配置参数config.json，通过java -jar jrp-client-1.0.0-SNAPSHOT.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
    ```
     {
      "path": "/java-proxy",//代理服务配置管理服务HTTP访问路径
