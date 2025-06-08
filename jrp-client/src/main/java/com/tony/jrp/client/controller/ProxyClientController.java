@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class ProxyClientController extends BaseController<ClientProxy> {
+    public static final String TYPE = "type";
     @Autowired
     IConfigService configService;
 
@@ -27,8 +28,8 @@ public class ProxyClientController extends BaseController<ClientProxy> {
 
     @Override
     public void list(RoutingContext ctx) {
-        String type = ctx.request().getParam("type");
-        IQueryExp queryExp = type == null ? null : Query.eq(Query.attr("type"), Query.value(type));
+        String type = ctx.request().getParam(TYPE);
+        IQueryExp queryExp = type == null ? null : Query.eq(Query.attr(TYPE), Query.value(type));
         this.execute((routingContext -> routingContext.response().write(Json.encode(this.service().list(queryExp)))), ctx);
     }
 }

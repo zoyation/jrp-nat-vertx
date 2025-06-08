@@ -1,8 +1,8 @@
 # jrp-nat 内网穿透工具
 ## 内网穿透工具介绍
-Java Reverse Proxy Network Address Translation，基于spring boot、vert.x开发的跨平台的内网穿透工具（jrp-server+jrp-Client），服务中转方式实现。
+Java Reverse Proxy Network Address Translation，基于spring boot、vert.x开发的跨平台的内网穿透工具（jrp-server+jrp-client），服务中转方式实现。
 
-内网穿透工具包括服务端jrp-server和客户端jrp-Client，在先在有固定公网IP和开放对应端口的服务器上部署穿透服务中转程序jrp-server，然后在内网部署服务代理程序jrp-Client，后期支持通过可视化web配置页面或者配置文件管理配置。
+内网穿透工具包括服务端jrp-server和客户端jrp-client，在先在有固定公网IP和开放对应端口的服务器上部署穿透服务中转程序jrp-server，然后在内网部署服务代理程序jrp-client，后期支持通过可视化web配置页面或者配置文件管理配置。
 ## 软件架构
 软件架构说明
 Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理、服务代理、服务中转）+vue3(element ui实现web端管理配置信息)

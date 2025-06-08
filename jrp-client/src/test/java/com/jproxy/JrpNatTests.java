@@ -10,7 +10,6 @@ import io.vertx.core.net.NetServer;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.streams.Pump;
 import io.vertx.ext.web.Router;
-import io.vertx.httpproxy.HttpProxy;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
@@ -41,18 +40,6 @@ class JrpNatTests {
 
     }
 
-    @Test
-    void testReverseProxy() throws InterruptedException {
-        Vertx vertx = Vertx.vertx();
-        HttpClient proxyClient = vertx.createHttpClient();
-        HttpProxy httpProxy = HttpProxy.reverseProxy(proxyClient);
-        //通过负载均衡策略动态选择原始请求地址
-        httpProxy.origin(22, "192.168.1.22");
-        //启动代理访问服务
-        HttpServer httpServer = vertx.createHttpServer();
-        httpServer.requestHandler(httpProxy).listen(88);
-        Thread.sleep(Long.MAX_VALUE);
-    }
 
     @Test
     void testTCPProxy() throws InterruptedException {

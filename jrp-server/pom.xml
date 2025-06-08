@@ -6,20 +6,21 @@
     <parent>
         <groupId>com.tony</groupId>
         <artifactId>jrp-nat</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
-    <artifactId>jrp-server</artifactId>
     <properties>
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <profileActive></profileActive>
     </properties>
+    <artifactId>jrp-server</artifactId>
+    <version>${revision}</version>
     <dependencies>
         <dependency>
             <groupId>com.tony</groupId>
             <artifactId>jrp-common</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
+            <version>${revision}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -52,18 +53,8 @@
             <version>${vertx.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.vertx</groupId>
-            <artifactId>vertx-web-proxy</artifactId>
-            <version>${vertx.version}</version>
-        </dependency>
-        <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.google.guava</groupId>
-            <artifactId>guava</artifactId>
-            <version>32.1.2-jre</version>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>

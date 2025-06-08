@@ -119,7 +119,7 @@ public class ProxyClientManager implements InitializingBean {
         server.requestHandler(router);
         server.listen(port);
         if (log.isInfoEnabled()) {
-            log.info("start server success:path=" + path + ",port=" + port);
+            log.info("start server success:path={},port={}", path, port);
         }
     }
 

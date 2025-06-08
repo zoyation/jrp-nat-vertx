@@ -31,8 +31,17 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
      * ”ip:端口“地址总长度数值对应字符串长度。
      */
     public static final int CLIENT_IP_PORT_LEN = 2;
+    /**
+     * vertx实例
+     */
     private final Vertx vertx;
-    SecurityService securityService;
+    /**
+     * 安全认证控制类
+     */
+    private final SecurityService securityService;
+    /**
+     * 客户端注册信息
+     */
     @Getter
     private final ClientRegister clientRegister;
     /**
@@ -62,47 +71,38 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
         serverSocket.handler(data -> {
             String msgId, clientAddress;
             Buffer realData;
-            //类型后第一个数字
-            int num = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1).toString());
-            boolean msgWithPort = num == 4 || num == 5;
-            if (msgWithPort) {
-                //消息前缀为：消息标志符，后面是消息id，即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
-                //代理端口位数（一位整数）、代理端口（字符串）长度
-                int portLen = Integer.parseInt(data.getString(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1));
-                int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
-                clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
-                msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
-                realData = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen, data.length());
-            } else {
-                //老版本，消息前缀为：消息标志符，后面是消息id，即是客户端远程ID长度2位(大于7，IPv4字符串最大长度15，IPv6字符串最大长度46)+远程ID(ip:端口)
-                int clientLength = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + CLIENT_IP_PORT_LEN).toString());
-                msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + CLIENT_IP_PORT_LEN + clientLength).toString();
-                clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + CLIENT_IP_PORT_LEN + clientLength).toString();
-                realData = data.getBuffer(JRPMsgType.TYPE_LEN + CLIENT_IP_PORT_LEN + clientLength, data.length());
-            }
+            //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
+            //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
+            int portLen = Integer.parseInt(data.getString(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1));
+            //请求唯一标识字符串长度（两位整数，不会超过100，比如110.242.69.21:49151对应长度值为19个字符‌，‌IPv6字符串的标准长度为39个字符‌，包括冒号（:）和十六进制数字‌）
+            int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
+            clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
+            msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
+            realData = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen, data.length());
             NetSocket clientNetSocket = clientTcpSocketMap.get(clientAddress);
             boolean closeMsg = realData.toString().endsWith(JRPMsgType.CLOSE.getCode());
             if (clientNetSocket != null) {
-                log.debug("收到内网代理服务器返回的TCP信息并返回给客户端[{}]。", clientAddress);
                 if (closeMsg) {
+                    log.debug("收到内网代理服务返回的关闭信息[{}]，关闭TCP连接。", clientAddress);
                     clientTcpSocketMap.remove(clientAddress);
                     clientNetSocket.close();
                 } else {
+                    log.debug("收到内网代理服务返回的TCP信息并返回给客户端[{}]。", clientAddress);
                     clientNetSocket.write(realData);
                 }
             } else if (closeMsg) {
-                log.warn("收到客户端关闭消息，客户端[{}]连接已经失效，不做处理！", clientAddress);
+                log.warn("收到内网代理服务返回的关闭消息，客户端[{}]连接已经失效，不做处理！", clientAddress);
             } else {
-                log.warn("收到内网服务返回消息，但是客户端[{}]连接已经失效，发送关闭连接消息到被代理端！", clientAddress);
+                log.warn("收到内网代理服务返回消息，但是客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", clientAddress);
                 serverSocket.write(Buffer.buffer(msgId).appendBuffer(Buffer.buffer(JRPMsgType.CLOSE.getCode())));
             }
         });
-
         //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端
         for (ClientProxy clientProxy : clientRegister.getProxies()) {
             Integer remotePort = clientProxy.getRemote_port();
             synchronized (ClientReverseProxyVerticle.this) {
                 if (proxyVerticleMap.get(remotePort) != null) {
+                    log.warn("已存在外网端口为[{}]的代理信息，不做处理！", remotePort);
                     continue;
                 }
             }
@@ -218,7 +218,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
             clientSocket.exceptionHandler(err -> log.error("客户端[{}]异常：{}！", clientAddress, err.getMessage(), err));
             boolean authorized = securityService.authorized(host);
             //授权通过，如果是非HTTP、SSH类TCP代理（这儿不能通过NetSocket判断创建连接是不是HTTP请求），才通知客户端初始化。
-            //http类型请求创建连接后会马上收到数据；SSH协议请求不会收到数据，需要通知被代理客户端连接后返回数据。延迟1秒判断httpRequestFlag如果为false，判断是ssh等协议连接，通知被代理端初始化。
+            //http类型请求创建连接后会马上收到数据；SSH协议请求不会收到数据，需要通知被代理客户端连接后返回数据。延迟判断httpRequestFlag如果为false，判断是ssh等协议连接，通知被代理端初始化。
             vertx.setTimer(200, (id) -> {
                 if (authorized && !httpFlag && !receiveDataFlag.get()) {
                     //关闭历史未移除连接

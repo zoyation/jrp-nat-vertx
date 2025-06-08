@@ -239,9 +239,6 @@ public class SecurityService implements InitializingBean {
     }
 
     public String getHttpWarnResponse() {
-        //响应头第一行
-        //简单放一个头部信息
-        //这个空行是来分隔请求头与请求体的
         return "HTTP/1.1 " + HttpResponseStatus.FORBIDDEN + "\r\n" +  //响应头第一行
                 "Content-Type: text/html; charset=utf-8\r\n" +  //简单放一个头部信息
                 "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
