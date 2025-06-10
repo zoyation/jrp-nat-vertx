@@ -33,6 +33,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
     public static final int CLIENT_IP_PORT_LEN = 2;
     public static final int IDLE_TIMEOUT = 10;
     public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     /**
      * vertx实例
      */
@@ -150,8 +151,8 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
         // 创建TCP服务器
         NetServerOptions options = new NetServerOptions();
         options.setIdleTimeout(IDLE_TIMEOUT);
-//        options.setReceiveBufferSize(RECEIVE_BUFFER_SIZE);
-//        options.setSendBufferSize(BUFFER_SIZE);
+        options.setReceiveBufferSize(BUFFER_SIZE);
+        options.setSendBufferSize(BUFFER_SIZE);
         NetServer server = vertx.createNetServer(options);
         // 处理连接请求
         server.connectHandler(clientSocket -> {
