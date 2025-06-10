@@ -48,6 +48,10 @@ import static io.vertx.core.http.HttpServerOptions.DEFAULT_MAX_WEBSOCKET_MESSAGE
 @Component
 @Slf4j
 public class ProxyClientManager implements InitializingBean {
+    public static final int CONNECT_TIMEOUT = 1000;
+    public static final int IDLE_TIMEOUT = 10;
+    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
+    public static final int WRITE_QUEUE_MAX_SIZE = 100;
     @Autowired
     protected Vertx vertx;
     @Autowired
@@ -204,14 +208,9 @@ public class ProxyClientManager implements InitializingBean {
                     String[] registerAddress = properties.getRegisterAddress().split(":");
                     int port = registerAddress.length == 2 ? Integer.parseInt(registerAddress[1]) : 80;
                     String host = registerAddress[0];
-                    WebSocketClientOptions options = new WebSocketClientOptions();
-                    options.setTcpKeepAlive(true);
-                    options.setMaxMessageSize(DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE * 2);
-                    options.setMaxFrameSize(DEFAULT_MAX_WEBSOCKET_FRAME_SIZE * 4);
-                    options.setReceiveBufferSize(1024 * 30);
-                    options.setConnectTimeout(1000);
+                    WebSocketClientOptions options = getWebSocketClientOptions();
                     CountDownLatch registerCountDown = new CountDownLatch(1);
-                    WebSocketConnectOptions connectOptions = new WebSocketConnectOptions().setPort(port).setHost(host).setURI("/").setConnectTimeout(1000);
+                    WebSocketConnectOptions connectOptions = new WebSocketConnectOptions().setPort(port).setHost(host).setURI("/").setConnectTimeout(CONNECT_TIMEOUT);
                     connectOptions.setRegisterWriteHandlers(true);
                     vertx.createWebSocketClient(options).connect(connectOptions).onComplete(webSocket -> {
                         // 设置处理pong的回调
@@ -252,9 +251,17 @@ public class ProxyClientManager implements InitializingBean {
                                                 }
                                             } else {
                                                 ClientProxy proxy = remotePortClientMap.get(remotePort);
-                                                receiveMsgAndProxy(msgId, clientId, proxy, data);
+                                                vertx.executeBlocking(() -> {
+                                                    try {
+                                                        receiveMsgAndProxy(msgId, clientId, proxy, data);
+                                                        return true;
+                                                    } catch (MalformedURLException e) {
+                                                        log.error("接受消息失败：{}", e.getMessage(), e);
+                                                        return false;
+                                                    }
+                                                });
                                             }
-                                        } catch (MalformedURLException e) {
+                                        } catch (Exception e) {
                                             log.error("接受消息失败：{}", e.getMessage(), e);
                                         }
                                         break;
@@ -296,6 +303,7 @@ public class ProxyClientManager implements InitializingBean {
                                                     log.info(message, proxy.getProxy_pass(), host, proxy.getRemote_port());
                                                 }
                                                 registerWebSocket = webSocket;
+                                                webSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
                                                 pingTimerId = vertx.setPeriodic(5000, id -> {
                                                     if (pongReceived.get()) {
                                                         pongReceived.set(false);
@@ -307,9 +315,7 @@ public class ProxyClientManager implements InitializingBean {
                                                             }
                                                         });
                                                     } else {
-                                                        log.error("未收到服务端[{}]pong消息，取消注册！", registerWebSocket.remoteAddress().toString());
-                                                        vertx.cancelTimer(id);
-                                                        closeWebSocket(true);
+                                                        log.warn("未收到服务端[{}]pong消息！", registerWebSocket.remoteAddress().toString());
                                                     }
                                                 });
                                             } else {
@@ -373,6 +379,16 @@ public class ProxyClientManager implements InitializingBean {
         }
         return result.get();
 
+    }
+
+    private static WebSocketClientOptions getWebSocketClientOptions() {
+        WebSocketClientOptions options = new WebSocketClientOptions();
+        options.setTcpKeepAlive(true);
+        options.setConnectTimeout(CONNECT_TIMEOUT);
+        options.setIdleTimeout(IDLE_TIMEOUT);
+        options.setMaxMessageSize(BUFFER_SIZE * 2);
+        options.setMaxFrameSize(BUFFER_SIZE * 4);
+        return options;
     }
 
     /**
@@ -439,89 +455,86 @@ public class ProxyClientManager implements InitializingBean {
             case HTTPS:
             case TCP: {
                 final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
-                vertx.executeBlocking(() -> {
-                    AtomicBoolean success = new AtomicBoolean(true);
-                    NetSocket netSocket = netSocketMap.get(clientId);
-                    if (netSocket != null) {
-                        //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                        netSocket.write(data);
-//                        if (netSocket.writeQueueFull()) {
-//                            registerWebSocket.pause();
-//                            netSocket.drainHandler((done) -> registerWebSocket.resume());
-//                        }
-                    } else {
-                        //多线程阻塞方式初始化连接，防止多次初始化
-                        synchronized (netSocketMap) {
-                            netSocket = netSocketMap.get(clientId);
-                            if (netSocket != null) {
-                                //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                                netSocket.write(data);
-//                                if (netSocket.writeQueueFull()) {
-//                                    registerWebSocket.pause();
-//                                    netSocket.drainHandler((done) -> registerWebSocket.resume());
-//                                }
-                            } else {
-                                log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
-                                CountDownLatch downLatch = new CountDownLatch(1);
-                                // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
-                                NetClientOptions clientOptions = new NetClientOptions();
-                                clientOptions.setReceiveBufferSize(1024 * 30);
-                                NetClient netClient = vertx.createNetClient(clientOptions);
-                                netClient.connect(socketAddress, asyncResult -> {
-                                    try {
-                                        if (asyncResult.succeeded()) {
-                                            NetSocket proxySocket = asyncResult.result();
-                                            netSocketMap.put(clientId, proxySocket);
-                                            proxySocket.closeHandler(ch -> {
-                                                if (registerWebSocket != null && netSocketMap.remove(clientId) != null) {
-                                                    log.debug("客户端[{}]对应的内容请求关闭！", clientId);
-                                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
-                                                }
-                                            });
-                                            proxySocket.handler(response -> {
-                                                if (registerWebSocket != null && netSocketMap.get(clientId) != null) {
-                                                    log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
-                                                    //消息标志符+客户端远程ID(ip+端口)长度2位+远程ID
-                                                    Integer remotePort = proxy.getRemote_port();
-                                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(response));
-//                                                    if (registerWebSocket.writeQueueFull()) {
-//                                                        proxySocket.pause();
-//                                                        registerWebSocket.drainHandler(done -> {
-//                                                            proxySocket.resume();
-//                                                        });
-//                                                    }
-                                                } else {
-                                                    log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
-                                                }
-                                            });
-                                            //转发返回消息到内网真实服务器
-                                            if (data.length() > 0) {
-                                                proxySocket.write(data);
-                                            }
-                                            log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
-                                        } else {
-                                            success.set(false);
-                                            log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());
-                                        }
-                                    } catch (Exception e) {
-                                        success.set(false);
-                                        log.error("初始化转发服务异常：{}", e.getMessage(), e);
-                                    } finally {
-                                        downLatch.countDown();
-                                    }
+                NetSocket netSocket = netSocketMap.get(clientId);
+                if (netSocket != null) {
+                    //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
+                    netSocket.write(data);
+                    if (netSocket.writeQueueFull()) {
+                        netSocket.pause();
+                        NetSocket finalNetSocket = netSocket;
+                        netSocket.drainHandler((done) -> {
+                            finalNetSocket.resume();
+                        });
+                    }
+                } else {
+                    synchronized (netSocketMap) {
+                        netSocket = netSocketMap.get(clientId);
+                        if (netSocket != null) {
+                            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
+                            netSocket.write(data);
+                            if (netSocket.writeQueueFull()) {
+                                netSocket.pause();
+                                NetSocket finalNetSocket = netSocket;
+                                netSocket.drainHandler((done) -> {
+                                    finalNetSocket.resume();
                                 });
+                            }
+                        } else {
+                            log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
+                            CountDownLatch downLatch = new CountDownLatch(1);
+                            // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
+                            NetClientOptions clientOptions = new NetClientOptions();
+                            clientOptions.setReceiveBufferSize(BUFFER_SIZE);
+                            clientOptions.setSendBufferSize(BUFFER_SIZE);
+                            NetClient netClient = vertx.createNetClient(clientOptions);
+                            netClient.connect(socketAddress, asyncResult -> {
                                 try {
-                                    downLatch.await();
-                                } catch (InterruptedException e) {
-                                    success.set(false);
-                                    log.error("转发服务连接处理异常：{}", e.getMessage(), e);
-
+                                    if (asyncResult.succeeded()) {
+                                        NetSocket proxySocket = asyncResult.result();
+                                        proxySocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
+                                        netSocketMap.put(clientId, proxySocket);
+                                        proxySocket.exceptionHandler(e -> {
+                                            log.debug("代理转发服务异常：{}", e.getMessage(), e);
+                                        });
+                                        proxySocket.closeHandler(ch -> {
+                                            if (registerWebSocket != null && netSocketMap.remove(clientId) != null) {
+                                                log.debug("客户端[{}]对应的内容请求关闭！", clientId);
+                                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+                                            }
+                                        });
+                                        proxySocket.handler(response -> {
+                                            if (registerWebSocket != null && netSocketMap.get(clientId) != null) {
+                                                log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
+                                                //消息标志符+客户端远程ID(ip+端口)长度2位+远程ID
+                                                Integer remotePort = proxy.getRemote_port();
+                                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(response));
+                                            } else {
+                                                log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
+                                            }
+                                        });
+                                        //转发返回消息到内网真实服务器
+                                        if (data.length() > 0) {
+                                            proxySocket.write(data);
+                                        }
+                                        log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
+                                    } else {
+                                        log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());
+                                    }
+                                } catch (Exception e) {
+                                    log.error("初始化转发服务异常：{}", e.getMessage(), e);
+                                } finally {
+                                    downLatch.countDown();
                                 }
+                            });
+                            try {
+                                downLatch.await();
+                            } catch (InterruptedException e) {
+                                log.error("转发服务连接处理异常：{}", e.getMessage(), e);
+
                             }
                         }
                     }
-                    return success.get();
-                });
+                }
                 break;
             }
         }

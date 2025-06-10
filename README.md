@@ -74,3 +74,9 @@ Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理�
    D:
    java -server -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.1.jar
    ```
+   
+## 版本修订记录
+### 1.0.1版本
+2025-06-10：
+1. 修复大文件上传容易导致断开和内存不够用问题，通过idletimeout控制websocket断线重连，通过写满控制上传速度。
+2. 去掉没用到的依赖包，优化代码结构，超时时间等参数提取成常量。

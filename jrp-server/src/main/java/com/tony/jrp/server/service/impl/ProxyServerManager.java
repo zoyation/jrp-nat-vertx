@@ -8,6 +8,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.*;
+import io.vertx.core.http.impl.ws.WebSocketFrameImpl;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.SocketAddress;
@@ -31,6 +32,8 @@ import static io.vertx.core.http.HttpServerOptions.DEFAULT_MAX_WEBSOCKET_MESSAGE
 @Component
 @Slf4j
 public class ProxyServerManager implements InitializingBean {
+    public static final int IDLE_TIMEOUT = 10;
+    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     @Autowired
     protected Vertx vertx;
     /**
@@ -94,12 +97,7 @@ public class ProxyServerManager implements InitializingBean {
      * 启动代理注册服务
      */
     private void startRegisterListener() {
-        HttpServerOptions serverOptions = new HttpServerOptions();
-        serverOptions.setRegisterWebSocketWriteHandlers(true);
-        serverOptions.setMaxWebSocketMessageSize(DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE * 2);
-        serverOptions.setMaxWebSocketFrameSize(DEFAULT_MAX_WEBSOCKET_FRAME_SIZE * 4);
-        serverOptions.setReceiveBufferSize(1024 * 30);
-        serverOptions.setTcpKeepAlive(true);
+        HttpServerOptions serverOptions = getHttpServerOptions();
         HttpServer vertxHttpServer = vertx.createHttpServer(serverOptions);
         vertxHttpServer.webSocketHandler(serverWebSocket -> {
             SocketAddress remoteAddress = serverWebSocket.remoteAddress();
@@ -131,9 +129,7 @@ public class ProxyServerManager implements InitializingBean {
                                         pongReceived.set(false);
                                         serverWebSocket.writePing(Buffer.buffer("server ping"));
                                     } else {
-                                        log.warn("来自[{}]的websocket连接没有pong返回，连接已断开！", remoteAddress);
-                                        vertx.cancelTimer(id);
-                                        serverWebSocket.close();
+                                        log.warn("来自[{}]的websocket连接没有pong返回！", remoteAddress);
                                     }
                                 });
                                 long finalServerPing = serverPing;
@@ -196,5 +192,15 @@ public class ProxyServerManager implements InitializingBean {
             request.response().setStatusCode(HttpResponseStatus.UNAUTHORIZED.code()).end();
         });
         vertxHttpServer.listen(this.properties.getRegisterPort());
+    }
+
+    private static HttpServerOptions getHttpServerOptions() {
+        HttpServerOptions serverOptions = new HttpServerOptions();
+        serverOptions.setRegisterWebSocketWriteHandlers(true);
+        serverOptions.setMaxWebSocketMessageSize(BUFFER_SIZE * 2);
+        serverOptions.setMaxWebSocketFrameSize(BUFFER_SIZE * 4);
+        serverOptions.setIdleTimeout(IDLE_TIMEOUT);
+        serverOptions.setTcpKeepAlive(true);
+        return serverOptions;
     }
 }

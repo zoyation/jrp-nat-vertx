@@ -31,6 +31,8 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
      * ”ip:端口“地址总长度数值对应字符串长度。
      */
     public static final int CLIENT_IP_PORT_LEN = 2;
+    public static final int IDLE_TIMEOUT = 10;
+    public static final int WRITE_QUEUE_MAX_SIZE = 100;
     /**
      * vertx实例
      */
@@ -67,6 +69,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
 
     @Override
     public void start() throws Exception {
+        serverSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
         /* 重新设置socket的handler，处理返回消息 */
         serverSocket.handler(data -> {
             String msgId, clientAddress;
@@ -89,6 +92,12 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
                 } else {
                     log.debug("收到内网代理服务返回的TCP信息并返回给客户端[{}]。", clientAddress);
                     clientNetSocket.write(realData);
+                    if (clientNetSocket.writeQueueFull()) {
+                        clientNetSocket.pause();
+                        clientNetSocket.drainHandler(done -> {
+                            clientNetSocket.resume();
+                        });
+                    }
                 }
             } else if (closeMsg) {
                 log.warn("收到内网代理服务返回的关闭消息，客户端[{}]连接已经失效，不做处理！", clientAddress);
@@ -140,10 +149,13 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
         Integer remotePort = clientProxy.getRemote_port();
         // 创建TCP服务器
         NetServerOptions options = new NetServerOptions();
-        options.setIdleTimeout(10000);
+        options.setIdleTimeout(IDLE_TIMEOUT);
+//        options.setReceiveBufferSize(RECEIVE_BUFFER_SIZE);
+//        options.setSendBufferSize(BUFFER_SIZE);
         NetServer server = vertx.createNetServer(options);
         // 处理连接请求
         server.connectHandler(clientSocket -> {
+            clientSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
             SocketAddress socketAddress = clientSocket.remoteAddress();
             log.debug("[{}] 创建连接!", socketAddress.toString());
             String clientAddress = socketAddress.toString();
@@ -171,6 +183,14 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
                         log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
                         clientTcpSocketMap.put(clientAddress, clientSocket);
                         serverSocket.write(Buffer.buffer(msgId).appendBuffer(data));
+                        if (serverSocket.writeQueueFull()) {
+                            serverSocket.pause();
+                            clientSocket.pause();
+                            serverSocket.drainHandler(done -> {
+                                serverSocket.resume();
+                                clientSocket.resume();
+                            });
+                        }
                     }
                 } else {
                     //首次访问或者首次验证都需要走HTTP接口
