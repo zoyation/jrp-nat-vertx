@@ -20,11 +20,6 @@ public class ProxyClientConfig implements Serializable {
      */
     private Integer port = 80;
     /**
-     * 和公网代理服务通信用的固定端口
-     */
-    private Integer remote_port = 800;
-
-    /**
      * 内网穿透，需要进行服务器中转代理服务配置
      */
     List<ClientProxy> remote_proxies;
@@ -34,7 +29,6 @@ public class ProxyClientConfig implements Serializable {
         return "ProxyConfig{" +
                 "path='" + path + '\'' +
                 ", port=" + port +
-                ", remote_port=" + remote_port +
                 ", remoteProxies=" + remote_proxies +
                 '}';
     }

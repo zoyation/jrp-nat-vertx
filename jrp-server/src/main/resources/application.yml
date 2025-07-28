@@ -1,6 +1,6 @@
 vertx:
   jrp:
-    #内网服务注册访问地址
+    #内网服务注册访问地址端口，服务端和客户端转发通信的websocket端口
     register-port: 2000
     #内网穿透中转服务web管理页面端口
     page-port: 10010
@@ -25,7 +25,7 @@ logging:
     # security 日志
     org.springframework.security: error
     # mybatis日志
-    com.tony.jrp: info
+    com.tony.jrp: debug
   charset:
     # 输出控制台编码
     console: UTF-8

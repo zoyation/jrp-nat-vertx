@@ -15,21 +15,19 @@ public class ClientProxy implements Serializable {
      */
     private String id;
     /**
-     * 代理名称
+     * 服务名称
      */
     private String name;
     /**
-     * 代理类型
+     * 服务地址
+     */
+    private String proxy_pass;
+    /**
+     * 穿透类型
      */
     private ServiceType type;
     /**
-     * 内网服务端口
-     */
-    private Integer port;
-    /**
-     * 外网转发服务器代理端口
+     * 穿透外网访问端口
      */
     private Integer remote_port;
-
-    private String proxy_pass;
 }

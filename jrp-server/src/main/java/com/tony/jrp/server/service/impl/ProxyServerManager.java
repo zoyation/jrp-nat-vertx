@@ -8,7 +8,6 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.*;
-import io.vertx.core.http.impl.ws.WebSocketFrameImpl;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.SocketAddress;
@@ -22,9 +21,6 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import static io.vertx.core.http.HttpServerOptions.DEFAULT_MAX_WEBSOCKET_FRAME_SIZE;
-import static io.vertx.core.http.HttpServerOptions.DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE;
 
 /**
  * 穿透服务端-代理转发服务管理
@@ -139,7 +135,7 @@ public class ProxyServerManager implements InitializingBean {
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
                                         reverseService.stopReverseProxy(remove, serverWebSocket)
-                                                .onSuccess(proxySuccess -> log.info("停止代理成功！"))
+                                                .onSuccess(proxySuccess -> log.info("停止代理成功，{}！",proxySuccess))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
                                     } else {
                                         log.warn("websocket[{}]关闭，没有代理信息！", remoteAddress);

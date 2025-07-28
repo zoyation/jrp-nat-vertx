@@ -1,11 +1,24 @@
-# jrp-nat 内网穿透工具
+# jrp-nat内网穿透工具(Java Reverse Proxy Network Address Translation)
 ## 内网穿透工具介绍
-Java Reverse Proxy Network Address Translation，基于spring boot、vert.x开发的跨平台的内网穿透工具（jrp-server+jrp-client），服务中转方式实现。
+基于spring boot、vert.x开发的跨平台的内网穿透工具，服务中转方式实现。
 
-内网穿透工具包括服务端jrp-server和客户端jrp-client，在先在有固定公网IP和开放对应端口的服务器上部署穿透服务中转程序jrp-server，然后在内网部署服务代理程序jrp-client，后期支持通过可视化web配置页面或者配置文件管理配置。
+jrp-nat包括服务端jrp-server和客户端jrp-client。
+
+先在有固定公网IP和开放对应端口的服务器上部署穿透服务端jrp-server，然后在内网部署服务穿透客户端jrp-client，客户端支持通过web配置页面或者配置文件管理配置（配置文件修改后会自动重新注册，不需要重启客户端）。
+
+## 工具特点
+![feature.png](jrp-doc/images/feature.png)
+1. **跨平台好维护**： 都通过java启动，装有jdk或jre 1.8+就可以运行，使用vert.x开发，代码量少好维护。
+2. **安全可靠**： 服务注册有验证，外网访问代理服务也需要先通过用户名密码验证，可以根据需求快速修改验证功能。
+3. **部署简单**： 部署只需3步：1.Linux、windows等系统上安装jdk或jre；2.修改配置文件；3.执行启动脚本运行程序。
+4. **使用便捷**： 配置简单，客户端支持json文件方式或者客户端web界面配置穿透信息，穿透配置调整后，不需要重启客户端，客户端会自动重新注册，支持断线重连，可通过参数配置重连次数。
+
 ## 软件架构
-软件架构说明
-Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理、服务代理、服务中转）+vue3(element ui实现web端管理配置信息)
+1. 软件架构说明：
+
+   Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理、服务代理、服务中转）+vue3(element ui实现web端管理配置信息)
+2. 功能实现图解：
+   ![description.png](jrp-doc/images/description.png)
 ## 安装教程
 1. 安装jdk8+或jre8+
 2. 修改配置文件application.yml里vertx.jrp下参数：     
@@ -35,24 +48,22 @@ Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理�
       jrp:
         #配置文件存储方式
         config-store-type: file
-        #是否注册到内网穿透代理服务器
-        register-to-server: true
-        #内网穿透代理服务注册地址，外网ip和端口
-        register-address: xxx.xxx.xxx.xxx:2000
+        #内网穿透代理服务注册地址，服务端外网ip和端口(vertx.jrp.register-port)
+        register-address: 127.0.0.1:2000
         #内网穿透验证信息和jrp-server配置值一样，不然不能注册。
         token: 2023202
     ```
 
-3. 修改内网穿透客户端穿透代理配置参数config.json，通过java -jar jrp-client-1.0.1.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
+3. 修改内网穿透客户端穿透代理配置参数config.json，通过java -jar jrp-client-1.0.1.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器，也可以运行在局域网内）,目前主要支持HTTP、TCP:
    ```
     {
-     "path": "/java-proxy",//代理服务配置管理服务HTTP访问路径
-     "port": 2000,//代理服务配置管理服务HTTP访问端口
+     "path": "jrp-client",//代理服务配置管理服务HTTP访问路径
+     "port": 8000,//代理服务配置管理服务HTTP访问端口
       "remote_proxies": [//内网穿透配置：内网服务注册到外网中转代理服务上实现内网穿透
        {
          "type": "HTTP",//穿透类型
-         "remote_port": 2002,//穿透端口，外网中转代理服务代理后的服务端口
-         "proxy_pass": "http://127.0.0.1:8001"//内网服务地址
+         "remote_port": 8001,//穿透端口，外网中转代理服务代理后的服务端口
+         "proxy_pass": "http://127.0.0.1:8000"//内网服务地址
        },
        {
          "type": "TCP",
@@ -62,10 +73,10 @@ Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理�
       ]
     }
    ```
-
-4. 穿透代理成功后，不管是http还是tcp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息，服务端重启后会要求重新输入认证信息。
-5. windows开机启动设置配置。
-
+4. 启动成功后，可以通过页面 http://127.0.0.1:8000/jrp-client/web/ 修改穿透配置，页面如下：
+![config.png](jrp-doc/images/config.png)
+5. 穿透代理成功后，不管是http还是tcp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息(默认为admin,10010)，服务端重启后会要求重新输入认证信息。
+6. windows开机启动设置配置。
    打开文件夹“C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp”，start.bat脚本放到里面，示例如下：
    [start.bat](jrp-client/src/bin/start.bat)
    ```
@@ -74,9 +85,12 @@ Spring Boot 2.7.14（运行控制、配置管理）+Vert.x 4.5.3（服务管理�
    D:
    java -server -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.1.jar
    ```
-   
 ## 版本修订记录
 ### 1.0.1版本
 2025-06-10：
 1. 修复大文件上传容易导致断开和内存不够用问题，通过idletimeout控制websocket断线重连，通过写满控制上传速度。
 2. 去掉没用到的依赖包，优化代码结构，超时时间等参数提取成常量。
+
+2025-07-28：
+1. 修改重连后提示端口占用问题。
+2. 客户端增加web配置界面，和直接改配置文件等效。

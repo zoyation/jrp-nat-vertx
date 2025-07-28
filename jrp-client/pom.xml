@@ -75,11 +75,11 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
         </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-jdbc</artifactId>
-            <version>6.0.12</version>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>org.springframework</groupId>-->
+<!--            <artifactId>spring-jdbc</artifactId>-->
+<!--            <version>6.0.12</version>-->
+<!--        </dependency>-->
     </dependencies>
     <build>
         <finalName>${project.artifactId}-${project.version}</finalName>
@@ -94,6 +94,7 @@
                     <include>mapper/**/*.xml</include>
                     <include>static/**</include>
                     <include>templates/**</include>
+                    <include>dist/**</include>
                     <include>*.xml</include>
                     <include>*.properties</include>
                     <include>config.json</include>
@@ -117,6 +118,7 @@
                                 <include>mapper/**/*.xml</include>
                                 <include>static/**</include>
                                 <include>templates/**</include>
+                                <include>dist/**</include>
                                 <include>*.xml</include>
                                 <include>*.properties</include>
                                 <include>config.json</include>

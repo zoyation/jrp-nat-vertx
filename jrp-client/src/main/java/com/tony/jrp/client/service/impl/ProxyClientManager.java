@@ -2,7 +2,6 @@ package com.tony.jrp.client.service.impl;
 
 import com.tony.jrp.client.config.ProxyClientConfig;
 import com.tony.jrp.client.config.ProxyClientProperties;
-import com.tony.jrp.client.controller.ProxyClientController;
 import com.tony.jrp.client.service.IConfigService;
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.enums.ServiceType;
@@ -24,6 +23,8 @@ import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.Router;
+import io.vertx.ext.web.handler.StaticHandler;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,11 +40,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
-import static io.vertx.core.http.HttpServerOptions.DEFAULT_MAX_WEBSOCKET_FRAME_SIZE;
-import static io.vertx.core.http.HttpServerOptions.DEFAULT_MAX_WEBSOCKET_MESSAGE_SIZE;
-
 /**
- * 客户端-代理服务管理
+ * 客户端-穿透配置管理
  */
 @Component
 @Slf4j
@@ -55,26 +53,46 @@ public class ProxyClientManager implements InitializingBean {
     @Autowired
     protected Vertx vertx;
     @Autowired
-    protected ProxyClientController proxyClientController;
-    @Autowired
     protected IConfigService configService;
     /**
      * 固定参数配置信息
      */
     @Autowired
     protected ProxyClientProperties properties;
-    /**
-     * vertx代理动态配置信息
-     */
-    private ProxyClientConfig proxyConfig;
+    int registerPort;
+    String registerHost;
     private HttpServer server;
+    private final Object serverLock = new Object();
     //registerWebSocket为null，未注册
     private volatile WebSocket registerWebSocket = null;
-    private volatile Long pingTimerId = null;
+    private Long pingTimerId = null;
+    List<ClientProxy> clientProxyList = new ArrayList<>();
+    String errorMessage = "";
     private final Map<String, NetSocket> netSocketMap = new ConcurrentHashMap<>();
-    volatile ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
+    ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
     private ScheduledFuture<?> registerSchedule = null;
     private Integer reconnectionTimes = 0;
+
+    @Data
+    private static class RegisterStatus {
+        private Boolean success;
+        private String message;
+        private String remoteHost;
+
+        private RegisterStatus(Boolean success, String message, String remoteHost) {
+            this.success = success;
+            this.message = message;
+            this.remoteHost = remoteHost;
+        }
+
+        public static RegisterStatus fail(String message, String remoteHost) {
+            return new RegisterStatus(false, message, remoteHost);
+        }
+
+        public static RegisterStatus ok(String message, String remoteHost) {
+            return new RegisterStatus(true, message, remoteHost);
+        }
+    }
 
     @Override
     public void afterPropertiesSet() {
@@ -82,6 +100,10 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     public void init() {
+        String[] registerAddress = properties.getRegisterAddress().split(":");
+        registerPort = registerAddress.length == 2 ? Integer.parseInt(registerAddress[1]) : 80;
+        registerHost = registerAddress[0];
+
         ConfigRetrieverOptions options = new ConfigRetrieverOptions().addStore(configService.getConfigStore());
         ConfigRetriever retriever = ConfigRetriever.create(vertx, options);
         retriever.getConfig().onComplete(json -> {
@@ -101,97 +123,110 @@ public class ProxyClientManager implements InitializingBean {
         });
     }
 
-    private void startServer() {
+    private HttpServer startServer(ProxyClientConfig newConfig) {
         if (log.isInfoEnabled()) {
             log.info("begin start server...");
         }
-        String path = proxyConfig.getPath();
-        Integer port = proxyConfig.getPort();
-        server = vertx.createHttpServer();
+        String path = newConfig.getPath();
+        if(path.endsWith("/")){
+            path = path.substring(0,path.length()-1);
+        }
+        if(!path.startsWith("/")){
+            path = "/"+path;
+        }
+
+        Integer port = newConfig.getPort();
+        HttpServer server = vertx.createHttpServer();
         Router router = Router.router(vertx);
-        router.route(path).handler(ctx -> {
-            HttpServerResponse response = ctx.response();
-            response.putHeader("content-type", "text/plain");
-            response.end("Welcome to use JRP-Client!");
+        StaticHandler dist = StaticHandler.create("dist");
+        String webUrl = path+"/web";
+        router.route(HttpMethod.GET,"/").handler(ctx -> {
+            ctx.redirect(webUrl);
         });
-        //配置信息管理
-        router.route(HttpMethod.POST, path + "/config/add").handler(ctx -> proxyClientController.add(ctx));
-        router.route(HttpMethod.POST, path + "/config/delete").handler(ctx -> proxyClientController.delete(ctx));
-        router.route(HttpMethod.POST, path + "/config/update").handler(ctx -> proxyClientController.update(ctx));
-        router.route(HttpMethod.GET, path + "/config/detail/:id").handler(ctx -> proxyClientController.detail(ctx));
-        router.route(HttpMethod.GET, path + "/config/list").handler(ctx -> proxyClientController.list(ctx));
+        router.route(HttpMethod.GET,webUrl+"/*").handler(dist);
+        //获取配置信息
+        router.route(HttpMethod.GET, path + "/config/list").handler(ctx -> configService.list(ctx));
+        //保存配置信息
+        router.route(HttpMethod.POST, path + "/config/save").handler(ctx -> configService.save(ctx));
+        //更新穿透状态
+        router.route(HttpMethod.GET, path + "/config/status").handler(ctx -> configService.end(() -> {
+            RegisterStatus registerStatus = registerWebSocket == null ? RegisterStatus.fail(errorMessage, registerHost) : RegisterStatus.ok("穿透成功！", registerHost);
+            return Json.encode(registerStatus);
+        }, ctx));
         server.requestHandler(router);
         server.listen(port);
         if (log.isInfoEnabled()) {
-            log.info("start server success:path={},port={}", path, port);
+            log.info("start server success，可浏览器访问[{http://127.0.0.1:{}{}}]进行穿透配置。",port,webUrl);
         }
+        return server;
     }
 
     private void restartServer(JsonObject result) {
-        this.proxyConfig = Json.decodeValue(result.toString(), ProxyClientConfig.class);
-        if (server != null) {
-            server.close(r -> {
-                if (r.failed()) {
-                    if (log.isErrorEnabled()) {
-                        log.error("close server failed:{}", r.cause().getMessage(), r.cause());
+        ProxyClientConfig newConfig = Json.decodeValue(result.toString(), ProxyClientConfig.class);
+        synchronized (serverLock) {
+            HttpServer olderServer = this.server;
+            if (olderServer != null) {
+                this.server = null;
+                olderServer.close(r -> {
+                    if (r.failed()) {
+                        if (log.isErrorEnabled()) {
+                            log.error("close server failed:{}", r.cause().getMessage(), r.cause());
+                        }
+                    } else {
+                        if (log.isInfoEnabled()) {
+                            log.info("close server success!");
+                        }
                     }
-                } else {
-                    if (log.isInfoEnabled()) {
-                        log.info("close server success!");
-                    }
-                    server = null;
-                    startServer();
-                }
-            });
-        } else {
-            startServer();
+                });
+            }
+            this.server = startServer(newConfig);
         }
-        reloadProxies();
+        reloadProxies(newConfig.getRemote_proxies());
     }
 
-    public void reloadProxies() {
+    public void reloadProxies(List<ClientProxy> remoteProxies) {
         reconnectionTimes = 0;
         if (registerSchedule != null) {
+            log.info("停止注册任务...");
             registerSchedule.cancel(true);
+            log.info("停止注册任务完成");
         }
-        this.closeWebSocket(true).onSuccess(success -> {
-            List<ClientProxy> remoteProxies = proxyConfig.getRemote_proxies();
-            if (properties.getRegisterToServer()) {
-                try {
-                    ClientRegister register = new ClientRegister();
-                    register.setId(CPUUtils.getCpuId());
-                    register.setToken(properties.getToken());
-                    List<ClientProxy> registerProxies = new ArrayList<>();
-                    if (remoteProxies != null) {
-                        registerProxies.addAll(remoteProxies);
+        this.closeSocket(true).onSuccess(success -> {
+            try {
+                ClientRegister register = new ClientRegister();
+                register.setId(CPUUtils.getCpuId());
+                register.setToken(properties.getToken());
+                List<ClientProxy> registerProxies = new ArrayList<>();
+                if (remoteProxies != null) {
+                    registerProxies.addAll(remoteProxies);
+                }
+                register.setProxies(registerProxies);
+                Map<String, ClientProxy> remotePortClientMap = registerProxies.stream().collect(Collectors.toMap(r -> r.getRemote_port().toString(), r -> r));
+                log.info("开始注册...");
+                vertx.executeBlocking(() -> tryRegister(register, remotePortClientMap)).onComplete(result -> {
+                    if (registerSchedule != null) {
+                        registerSchedule.cancel(true);
                     }
-                    register.setProxies(registerProxies);
-                    Map<String, ClientProxy> remotePortClientMap = registerProxies.stream().collect(Collectors.toMap(r -> r.getRemote_port().toString(), r -> r));
-                    log.info("开始注册...");
-                    vertx.executeBlocking(() -> tryRegister(register, remotePortClientMap)).onComplete(result -> {
-                        if (registerSchedule != null) {
-                            registerSchedule.cancel(true);
-                        }
-                        //间隔五秒进行断线判断，如果断线重新注册
-                        registerSchedule = registerService.scheduleWithFixedDelay(() -> {
-                            if (registerWebSocket == null) {
-                                if (reconnectionTimes >= properties.getReconnectionTimes()) {
-                                    log.warn("与外网穿透服务断开连接或未注册，断线重连次数已达限制次数[{}]，不再重连!", properties.getReconnectionTimes());
-                                    registerSchedule.cancel(false);
-                                } else {
-                                    reconnectionTimes = reconnectionTimes + 1;
-                                    log.info("与外网穿透服务断开连接或未注册，尝试第[{}]次注册...", reconnectionTimes);
-                                    if (tryRegister(register, remotePortClientMap)) {
-                                        reconnectionTimes = 0;
-                                    }
+                    //间隔五秒进行断线判断，如果断线重新注册
+                    registerSchedule = registerService.scheduleWithFixedDelay(() -> {
+                        if (registerWebSocket == null) {
+                            if (reconnectionTimes >= properties.getReconnectionTimes()) {
+                                log.warn("与外网穿透服务断开连接或未注册，断线重连次数已达限制次数[{}]，不再重连!", properties.getReconnectionTimes());
+                                registerSchedule.cancel(false);
+                            } else {
+                                reconnectionTimes = reconnectionTimes + 1;
+                                log.info("与外网穿透服务断开连接或未注册，尝试第[{}]次注册...", reconnectionTimes);
+                                if (tryRegister(register, remotePortClientMap)) {
+                                    reconnectionTimes = 0;
                                 }
                             }
-                        }, 5, 5, TimeUnit.SECONDS);
-                    });
-                } catch (Exception e) {//注册失败
-                    log.error("内网穿透注册失败：{}", e.getMessage(), e);
-                    registerWebSocket = null;
-                }
+                        }
+                    }, 5, 5, TimeUnit.SECONDS);
+                });
+            } catch (Exception e) {//注册失败
+                String errorMessage = e.getMessage();
+                log.error("内网穿透注册失败：{}", errorMessage, e);
+                registerWebSocket = null;
             }
         });
     }
@@ -205,12 +240,9 @@ public class ProxyClientManager implements InitializingBean {
         if (registerWebSocket == null) {
             synchronized (ProxyClientManager.this) {
                 if (registerWebSocket == null) {
-                    String[] registerAddress = properties.getRegisterAddress().split(":");
-                    int port = registerAddress.length == 2 ? Integer.parseInt(registerAddress[1]) : 80;
-                    String host = registerAddress[0];
                     WebSocketClientOptions options = getWebSocketClientOptions();
                     CountDownLatch registerCountDown = new CountDownLatch(1);
-                    WebSocketConnectOptions connectOptions = new WebSocketConnectOptions().setPort(port).setHost(host).setURI("/").setConnectTimeout(CONNECT_TIMEOUT);
+                    WebSocketConnectOptions connectOptions = new WebSocketConnectOptions().setPort(registerPort).setHost(registerHost).setURI("/").setConnectTimeout(CONNECT_TIMEOUT);
                     connectOptions.setRegisterWriteHandlers(true);
                     vertx.createWebSocketClient(options).connect(connectOptions).onComplete(webSocket -> {
                         // 设置处理pong的回调
@@ -282,13 +314,7 @@ public class ProxyClientManager implements InitializingBean {
                                                             message = "HTTPS服务[{}]代理后外网地址：[https://{}:{}]！";
                                                             break;
                                                         case TCP:
-                                                            if (proxy.getProxy_pass().toLowerCase().startsWith("https")) {
-                                                                message = "HTTPS服务[{}]代理后外网地址：[https://{}:{}]！";
-                                                            } else if (proxy.getProxy_pass().toLowerCase().startsWith("http")) {
-                                                                message = "HTTP服务[{}]代理后外网地址：[http://{}:{}]！";
-                                                            } else {
-                                                                message = "TCP服务[{}]代理后外网地址：[{}:{}]！";
-                                                            }
+                                                            message = "TCP服务[{}]代理后外网地址：[{}:{}]！";
                                                             break;
                                                         case UDP:
                                                             message = "UDP服务[{}]代理后外网地址：[{}:{}]！";
@@ -300,8 +326,9 @@ public class ProxyClientManager implements InitializingBean {
                                                             message = "SOCKS5服务[{}]代理后外网地址：[{}:{}]！";
                                                             break;
                                                     }
-                                                    log.info(message, proxy.getProxy_pass(), host, proxy.getRemote_port());
+                                                    log.info(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                 }
+                                                clientProxyList = register.getProxies();
                                                 registerWebSocket = webSocket;
                                                 webSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
                                                 pingTimerId = vertx.setPeriodic(5000, id -> {
@@ -311,7 +338,7 @@ public class ProxyClientManager implements InitializingBean {
                                                             if (!prs.succeeded()) {
                                                                 log.error("ping失败：{}", prs.cause().getMessage(), prs.cause());
                                                                 vertx.cancelTimer(id);
-                                                                closeWebSocket(true);
+                                                                closeSocket(true);
                                                             }
                                                         });
                                                     } else {
@@ -319,10 +346,12 @@ public class ProxyClientManager implements InitializingBean {
                                                     }
                                                 });
                                             } else {
-                                                log.error("注册失败：{}", registerResult.getMsg());
+                                                errorMessage = registerResult.getMsg();
+                                                log.error("注册失败：{}", errorMessage);
                                             }
                                         } catch (Exception e) {
-                                            log.error("注册异常：{}", e.getMessage(), e);
+                                            errorMessage = e.getMessage();
+                                            log.error("注册异常：{}", errorMessage, e);
                                         } finally {
                                             registerCountDown.countDown();
                                         }
@@ -334,14 +363,14 @@ public class ProxyClientManager implements InitializingBean {
                                 if (registerWebSocket == null) {
                                     registerCountDown.countDown();
                                 }
-                                closeWebSocket(false);
+                                closeSocket(false);
                             });
                             webSocket.exceptionHandler(err -> {
                                 log.error("websocket 连接异常：{}", err.getMessage(), err);
                                 if (registerWebSocket == null) {
                                     registerCountDown.countDown();
                                 }
-                                closeWebSocket(true);
+                                closeSocket(true);
                             });
                             String registerInfo = Json.encode(register);
                             log.info("开始发送注册消息：\r\n{}", register);
@@ -349,16 +378,19 @@ public class ProxyClientManager implements InitializingBean {
                                 if (rt.succeeded()) {
                                     log.info("发送注册消息成功，等待返回，注册消息为：\r\n{}", register);
                                 } else {
+                                    errorMessage = rt.cause().getMessage();
                                     log.info("发送注册消息失败，error：{}", rt.cause().getMessage(), rt.cause());
                                     registerCountDown.countDown();
                                 }
                             });
                         } catch (Exception e) {
-                            closeWebSocket(true);
+                            closeSocket(true);
                             registerCountDown.countDown();
+                            errorMessage = e.getMessage();
                             log.error("websocket 连接初始化异常：{}", e.getMessage(), e);
                         }
                     }, err -> {
+                        errorMessage = err.getMessage();
                         log.error("websocket 初始化异常：{}", err.getMessage(), err);
                         registerCountDown.countDown();
                     });
@@ -392,38 +424,34 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     /**
-     * 关闭webSocket
+     * 关闭socket
      *
      * @param close 是否调用registerWebSocket的关闭方法
      * @return Future<Boolean> 关闭结果
      */
-    private Future<Boolean> closeWebSocket(Boolean close) {
+    private Future<Boolean> closeSocket(Boolean close) {
         Promise<Boolean> promise = Promise.promise();
-        vertx.executeBlocking(() -> {
-            try {
-                if (pingTimerId != null) {
-                    vertx.cancelTimer(pingTimerId);
-                    pingTimerId = null;
-                }
-                netSocketMap.values().forEach(NetSocket::close);
-                netSocketMap.clear();
-                if (registerWebSocket != null && !registerWebSocket.isClosed() && close) {
-                    registerWebSocket.close().onComplete(done -> {
-                        registerWebSocket = null;
-                        promise.complete();
-                    });
-                } else {
-                    registerWebSocket = null;
-                    promise.complete();
-                }
-            } catch (Exception e) {
-                log.error("closeWebSocket error：{}", e.getMessage(), e);
-            } finally {
-                netSocketMap.clear();
-                registerWebSocket = null;
+        try {
+            if (pingTimerId != null) {
+                log.info("取消ping任务:{}", pingTimerId);
+                vertx.cancelTimer(pingTimerId);
+                pingTimerId = null;
             }
-            return true;
-        });
+            if (!netSocketMap.isEmpty()) {
+                log.info("停止转发服务");
+                netSocketMap.values().forEach(NetSocket::close);
+            }
+            if (registerWebSocket != null && !registerWebSocket.isClosed() && close) {
+                log.info("关闭registerWebSocket");
+                registerWebSocket.close();
+            }
+        } catch (Exception e) {
+            log.error("closeWebSocket error：{}", e.getMessage(), e);
+        } finally {
+            registerWebSocket = null;
+            netSocketMap.clear();
+            promise.complete();
+        }
         return promise.future();
     }
 
@@ -506,7 +534,7 @@ public class ProxyClientManager implements InitializingBean {
                                             if (registerWebSocket != null && netSocketMap.get(clientId) != null) {
                                                 log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
                                                 //消息标志符+客户端远程ID(ip+端口)长度2位+远程ID
-                                                Integer remotePort = proxy.getRemote_port();
+                                                //Integer remotePort = proxy.getRemote_port();
                                                 registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(response));
                                             } else {
                                                 log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
@@ -530,7 +558,6 @@ public class ProxyClientManager implements InitializingBean {
                                 downLatch.await();
                             } catch (InterruptedException e) {
                                 log.error("转发服务连接处理异常：{}", e.getMessage(), e);
-
                             }
                         }
                     }

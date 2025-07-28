@@ -15,10 +15,6 @@ public class ProxyClientProperties {
      */
     private String configStoreType = "file";
     /**
-     * 是否注册到上游服务
-     */
-    private Boolean registerToServer = Boolean.FALSE;
-    /**
      * 注册服务地址
      */
     private String registerAddress;

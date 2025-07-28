@@ -1,10 +1,8 @@
 vertx:
   jrp:
-    #配置文件存储方式
+    #配置文件存储方式，目前只支持file
     config-store-type: file
-    #是否注册到内网穿透代理服务器
-    register-to-server: true
-    #内网穿透代理服务注册地址
+    #内网穿透代理服务注册地址，服务端启动时，会自动注册到内网穿透代理服务中
     register-address: 127.0.0.1:2000
     #内网穿透代理服务注册断线重连次数
     reconnection-times: 600
@@ -19,7 +17,7 @@ logging:
     # security 日志
     org.springframework.security: error
     # mybatis日志
-    com.tony.jrp: info
+    com.tony.jrp: debug
   charset:
     # 输出控制台编码
     console: UTF-8
