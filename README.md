@@ -53,8 +53,8 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
         #内网穿透验证信息和jrp-server配置值一样，不然不能注册。
         token: 2023202
     ```
-
-3. 修改内网穿透客户端穿透代理配置参数config.json，通过java -jar jrp-client-1.0.1.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器，也可以运行在局域网内）,目前主要支持HTTP、TCP:
+3. window通过[start.bat](jrp-server/src/bin/start.bat)，linux通过[start.sh](jrp-server/src/bin/start.sh)启动内网穿透服务端（有外网ip和端口的服务器上启动）。
+4. 修改内网穿透客户端穿透代理配置参数config.json，通过java -jar jrp-client-1.0.1.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
    ```
     {
      "path": "jrp-client",//代理服务配置管理服务HTTP访问路径
@@ -73,10 +73,10 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
       ]
     }
    ```
-4. 启动成功后，可以通过页面 http://127.0.0.1:8000/jrp-client/web/ 修改穿透配置，页面如下：
+5. 启动成功后，可以通过页面 http://127.0.0.1:8000/jrp-client/web/ 修改穿透配置，页面如下：
 ![config.png](jrp-doc/images/config.png)
-5. 穿透代理成功后，不管是http还是tcp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息(默认为admin,10010)，服务端重启后会要求重新输入认证信息。
-6. windows开机启动设置配置。
+6. 穿透代理成功后，不管是http还是tcp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息(默认为admin,10010)，服务端重启后会要求重新输入认证信息。
+7. windows开机启动设置配置。
    打开文件夹“C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp”，start.bat脚本放到里面，示例如下：
    [start.bat](jrp-client/src/bin/start.bat)
    ```
