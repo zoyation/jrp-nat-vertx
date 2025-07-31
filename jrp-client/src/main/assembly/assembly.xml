@@ -35,10 +35,6 @@
                 <include>config.json</include>
                 <include>application.yml</include>
                 <include>application-${profileActive}.yml</include>
-                <include>mapper/**/*.xml</include>
-                <include>static/**</include>
-                <include>dist/**</include>
-                <include>templates/**</include>
                 <include>*.xml</include>
                 <include>*.properties</include>
             </includes>

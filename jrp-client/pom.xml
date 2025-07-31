@@ -108,30 +108,12 @@
                 <version>3.2.0</version>
                 <configuration>
                     <encoding>UTF-8</encoding>
-                    <resources>
-                        <resource>
-                            <directory>${project.basedir}/src/main/resources</directory>
-                            <filtering>true</filtering>
-                            <includes>
-                                <include>application.yml</include>
-                                <include>application-${profileActive}.yml</include>
-                                <include>mapper/**/*.xml</include>
-                                <include>static/**</include>
-                                <include>templates/**</include>
-                                <include>dist/**</include>
-                                <include>*.xml</include>
-                                <include>*.properties</include>
-                                <include>config.json</include>
-                            </includes>
-                        </resource>
-                    </resources>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <finalName>${project.artifactId}-${project.version}</finalName>
                     <layout>ZIP</layout>
                 </configuration>
                 <!--                <configuration>-->

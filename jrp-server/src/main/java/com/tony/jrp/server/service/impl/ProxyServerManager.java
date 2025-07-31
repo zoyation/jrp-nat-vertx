@@ -135,7 +135,7 @@ public class ProxyServerManager implements InitializingBean {
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
                                         reverseService.stopReverseProxy(remove, serverWebSocket)
-                                                .onSuccess(proxySuccess -> log.info("停止代理成功，{}！",proxySuccess))
+                                                .onSuccess(proxySuccess -> log.info("{}！",proxySuccess))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
                                     } else {
                                         log.warn("websocket[{}]关闭，没有代理信息！", remoteAddress);
