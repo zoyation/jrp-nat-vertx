@@ -20,8 +20,9 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 2. 功能实现图解：
    ![description.png](jrp-doc/images/description.png)
 ## 安装教程
-1. 安装jdk8+或jre8+
-2. 修改配置文件application.yml里vertx.jrp下参数：     
+1. 安装jdk8+或jre8+，jre下载地址：https://www.oracle.com/java/technologies/javase/javase8u211-later-archive-downloads.html。
+2. 下载已打好的包“jrp-server-1.0.1.tar.gz、jrp-client-1.0.1.tar.gz”，放到对应机器上，并解压，下载地址：https://gitee.com/java-tony/jrp-nat-vertx/releases/tag/v1.0.1。
+3. 修改配置文件application.yml里vertx.jrp下参数：     
    a. 内网穿透中转服务jrp-server配置（带独立外网ip和端口的服务器）：
 
    ```
@@ -53,8 +54,8 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
         #内网穿透验证信息和jrp-server配置值一样，不然不能注册。
         token: 2023202
     ```
-3. window通过[start.bat](jrp-server/src/bin/start.bat)，linux通过[start.sh](jrp-server/src/bin/start.sh)启动内网穿透服务端（有外网ip和端口的服务器上启动）。
-4. 修改内网穿透客户端穿透代理配置参数config.json，通过java -jar jrp-client-1.0.1.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
+4. window通过[start.bat](jrp-server/src/bin/start.bat)，linux通过[start.sh](jrp-server/src/bin/start.sh)启动内网穿透服务端（有外网ip和端口的服务器上启动）。
+5. 修改内网穿透客户端穿透代理配置参数config.json，通过java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.1.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
    ```
     {
      "path": "jrp-client",//代理服务配置管理服务HTTP访问路径
@@ -73,11 +74,11 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
       ]
     }
    ```
-5. 启动成功后，可以通过页面 http://127.0.0.1:8000/jrp-client/web/ 修改穿透配置，页面如下：
+6. 启动成功后，可以通过页面 http://127.0.0.1:8000/jrp-client/web/ 修改穿透配置，页面如下：
 ![config.png](jrp-doc/images/config.png)
-6. 穿透代理成功后，不管是http还是tcp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息(默认为admin,10010)，服务端重启后会要求重新输入认证信息。
-7. windows开机启动设置配置。
-   打开文件夹“C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp”，start.bat脚本放到里面，示例如下：
+7. 穿透代理成功后，不管是http还是tcp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息(默认为admin,10010)，服务端重启后会要求重新输入认证信息。
+8. windows开机启动设置配置。
+   方式1：打开文件夹“C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp”，start.bat脚本放到里面，示例如下：
    [start.bat](jrp-client/src/bin/start.bat)
    ```
    chcp 65001
@@ -85,6 +86,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    D:
    java -server -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.1.jar
    ```
+   方式二：https://gitee.com/mirrors_kohsuke/winsw
 ## 版本修订记录
 ### 1.0.1版本
 2025-06-10：
