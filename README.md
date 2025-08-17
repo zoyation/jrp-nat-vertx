@@ -1,6 +1,6 @@
 # jrp-nat内网穿透工具(Java Reverse Proxy Network Address Translation)
 ## 内网穿透工具介绍
-基于spring boot、vert.x开发的跨平台的内网穿透工具，服务中转方式实现。
+基于spring boot、vert.x开发的跨平台的内网穿透工具，服务中转方式实现，支持HTTP（Websocket、SSE）、TCP(ssh、数据库连接、windows远程)、UDP穿透。
 
 jrp-nat包括服务端jrp-server和客户端jrp-client。
 
@@ -11,7 +11,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 1. **跨平台好维护**： 都通过java启动，装有jdk或jre 1.8+就可以运行，使用vert.x开发，代码量少好维护。
 2. **安全可靠**： 服务注册有验证，外网访问代理服务也需要先通过用户名密码验证，可以根据需求快速修改验证功能。
 3. **部署简单**： 部署只需3步：1.Linux、windows等系统上安装jdk或jre；2.修改配置文件；3.执行启动脚本运行程序。
-4. **使用便捷**： 配置简单，客户端支持json文件方式或者客户端web界面配置穿透信息，穿透配置调整后，不需要重启客户端，客户端会自动重新注册，支持断线重连，可通过参数配置重连次数。
+4. **使用便捷**： 配置简单，客户端支持json文件方式或者客户端web界面配置穿透信息，穿透配置调整后，不需要重启客户端，会自动重新注册，支持断线重连，可通过参数配置重连次数。
 
 ## 软件架构
 1. 软件架构说明：
@@ -21,7 +21,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    ![description.png](jrp-doc/images/description.png)
 ## 安装教程
 1. 安装jdk8+或jre8+，jre下载地址：https://www.oracle.com/java/technologies/javase/javase8u211-later-archive-downloads.html。
-2. 下载已打好的包“jrp-server-1.0.1.tar.gz、jrp-client-1.0.1.tar.gz”，放到对应机器上，并解压，下载地址：https://gitee.com/java-tony/jrp-nat-vertx/releases/tag/v1.0.1。
+2. 下载已打好的包“jrp-server-1.0.2.tar.gz、jrp-client-1.0.2.tar.gz”，放到对应机器上，并解压，下载地址：https://gitee.com/java-tony/jrp-nat-vertx/releases/tag/v1.0.2。
 3. 修改配置文件application.yml里vertx.jrp下参数：     
    a. 内网穿透中转服务jrp-server配置（带独立外网ip和端口的服务器）：
 
@@ -55,7 +55,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
         token: 2023202
     ```
 4. window通过[start.bat](jrp-server/src/bin/start.bat)，linux通过[start.sh](jrp-server/src/bin/start.sh)启动内网穿透服务端（有外网ip和端口的服务器上启动）。
-5. 修改内网穿透客户端穿透代理配置参数config.json，通过java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.1.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
+5. 修改内网穿透客户端穿透代理配置参数config.json，通过java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.2.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）,目前主要支持HTTP、TCP:
    ```
     {
      "path": "jrp-client",//代理服务配置管理服务HTTP访问路径
@@ -84,7 +84,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    chcp 65001
    cd D:\jrp-client
    D:
-   java -server -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.1.jar
+   java -server -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.2.jar
    ```
    方式二：https://gitee.com/mirrors_kohsuke/winsw
 ## 版本修订记录
@@ -96,3 +96,9 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 2025-07-28：
 1. 修改重连后提示端口占用问题。
 2. 客户端增加web配置界面，和直接改配置文件等效。
+
+### 1.0.2版本
+1. 增加客户端自定义穿透成功后访问认证信息（用户名、密码，可选配置，未配置时统一使用服务端配置的认证信息进行认证）功能。
+2. 增加客户端穿透注册信息持久化到磁盘功能。
+3. 增加客户端配置信息存储到数据库功能。
+4. 增加UDP穿透功能。

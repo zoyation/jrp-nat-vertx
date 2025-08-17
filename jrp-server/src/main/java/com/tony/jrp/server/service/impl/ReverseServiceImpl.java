@@ -23,12 +23,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- *
+ * 穿透服务端
  */
 @Service
 @Slf4j
 public class ReverseServiceImpl implements IReverseService {
+    /**
+     * 允许穿透的最小端口
+     */
     public static final int MIN_PORT = 1024;
+    /**
+     * 允许穿透的最大端口
+     */
     public static final int MAX_PORT = 49151;
     @Autowired
     protected Vertx vertx;

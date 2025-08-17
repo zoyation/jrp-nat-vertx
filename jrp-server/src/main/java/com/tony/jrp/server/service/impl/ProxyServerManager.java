@@ -76,7 +76,7 @@ public class ProxyServerManager implements InitializingBean {
                 //401 Unauthorized
                 //www-authenticate: Basic realm="Restricted Area"
                 //authorization:Basic bG9uZ3J1YW46TFJANjg4MDc4
-                if (securityService.authorize(request.method().name(), host, authorization)) {
+                if (securityService.authorize(properties.getUsername(),properties.getPassword(),request.method().name(), host, authorization)) {
                     response.putHeader("content-type", "text/plain");
                     response.setStatusCode(HttpResponseStatus.OK.code());
                     response.end("Welcome to use jrp-server! Your WAN IP is [" + host + "]!");

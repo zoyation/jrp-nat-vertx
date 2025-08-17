@@ -8,6 +8,10 @@ vertx:
     reconnection-times: 600
     #内网穿透验证信息
     token: 2023202
+    #穿透成功后，访问时的认证用户名，如果没配置会使用服务端里面配置的认证信息。
+    username: client
+    #穿透成功后，访问时的认证密码，如果没配置会使用服务端里面配置的认证信息。
+    password: 10086
 # 日志配置
 logging:
   level:

@@ -26,4 +26,12 @@ public class ProxyClientProperties {
      * 断线重连次数
      */
     private Integer reconnectionTimes = 6*100;
+    /**
+     * 穿透成功后，访问认证用户名，如果没配置会使用服务端里面配置的认证信息
+     */
+    private String username;
+    /**
+     * 穿透成功后，访问认证密码，如果没配置会使用服务端里面配置的认证信息
+     */
+    private String password;
 }

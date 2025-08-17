@@ -1,17 +1,15 @@
 vertx:
   jrp:
-    #内网服务注册访问地址端口，服务端和客户端转发通信的websocket端口
-    register-port: 2000
     #内网穿透中转服务web管理页面端口
     page-port: 10010
     #内网穿透中转服务web管理页面访问路径
     page-path: /jrp-server
+    #内网服务注册访问地址端口，服务端和客户端转发通信的websocket端口
+    register-port: 2000
     #内网穿透中转服务web管理页面登录用户名
     username: admin
     #内网穿透中转服务web管理页面密码
     password: 10010
-    #http Digest认证算法
-    algorithm: MD5
     #内网穿透服务注册验证信息
     token: 2023202
     #白名单支持正则

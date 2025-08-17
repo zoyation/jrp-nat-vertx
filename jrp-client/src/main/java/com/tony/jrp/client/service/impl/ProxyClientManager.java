@@ -15,6 +15,8 @@ import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.datagram.DatagramSocket;
+import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.*;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
@@ -69,6 +71,7 @@ public class ProxyClientManager implements InitializingBean {
     List<ClientProxy> clientProxyList = new ArrayList<>();
     String errorMessage = "";
     private final Map<String, NetSocket> netSocketMap = new ConcurrentHashMap<>();
+    private final Map<String, DatagramSocket> datagramSocketMap = new ConcurrentHashMap<>();
     ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
     private ScheduledFuture<?> registerSchedule = null;
     private Integer reconnectionTimes = 0;
@@ -196,6 +199,8 @@ public class ProxyClientManager implements InitializingBean {
                 ClientRegister register = new ClientRegister();
                 register.setId(CPUUtils.getCpuId());
                 register.setToken(properties.getToken());
+                register.setUsername(properties.getUsername());
+                register.setPassword(properties.getPassword());
                 List<ClientProxy> registerProxies = new ArrayList<>();
                 if (remoteProxies != null) {
                     registerProxies.addAll(remoteProxies);
@@ -552,6 +557,69 @@ public class ProxyClientManager implements InitializingBean {
                                     log.error("初始化转发服务异常：{}", e.getMessage(), e);
                                 } finally {
                                     downLatch.countDown();
+                                }
+                            });
+                            try {
+                                downLatch.await();
+                            } catch (InterruptedException e) {
+                                log.error("转发服务连接处理异常：{}", e.getMessage(), e);
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case UDP:{
+                final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
+                DatagramSocket netSocket = datagramSocketMap.get(clientId);
+                if (netSocket != null) {
+                    //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
+                    netSocket.send(data,originPort,originHost,rs->{
+                        if(rs.failed()){
+                            Throwable e = rs.cause();
+                            log.error("代理转发服务异常：{}", e.getMessage(), e);
+                            if (registerWebSocket != null && datagramSocketMap.get(clientId) != null) {
+                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+                            }
+                        }
+                    });
+                } else {
+                    synchronized (datagramSocketMap) {
+                        netSocket = datagramSocketMap.get(clientId);
+                        if (netSocket != null) {
+                            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
+                            netSocket.send(data,originPort,originHost,rs->{
+                                if(rs.succeeded()){
+
+                                }else{
+                                    Throwable e = rs.cause();
+                                    log.debug("代理转发服务异常：{}", e.getMessage(), e);
+                                }
+                            });
+                        } else {
+                            log.info("收到UPD数据[{}]，准备发送到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
+                            CountDownLatch downLatch = new CountDownLatch(1);
+                            // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
+                            DatagramSocketOptions clientOptions = new DatagramSocketOptions();
+                            clientOptions.setReceiveBufferSize(BUFFER_SIZE);
+                            clientOptions.setSendBufferSize(BUFFER_SIZE);
+                            DatagramSocket netClient = vertx.createDatagramSocket(clientOptions);
+                            netClient.exceptionHandler(e->{
+                                log.error("代理转发服务异常：{}", e.getMessage(), e);
+                                if (registerWebSocket != null && datagramSocketMap.get(clientId) != null) {
+                                    log.debug("客户端[{}]对应的内容异常！", clientId);
+                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+                                }
+                            });
+                            netClient.handler(socket->{
+                                log.debug("原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
+                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(socket.data()));
+                            });
+                            netClient.send(data,originPort,originHost,rs->{
+                                if(rs.failed()){
+                                    Throwable e = rs.cause();
+                                    log.error("代理转发数据异常：{}", e.getMessage(), e);
+                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
                                 }
                             });
                             try {

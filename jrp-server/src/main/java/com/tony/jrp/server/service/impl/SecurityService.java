@@ -1,5 +1,6 @@
 package com.tony.jrp.server.service.impl;
 
+import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.server.config.JRPServerProperties;
 import com.tony.jrp.server.security.AuthInfo;
 import com.tony.jrp.server.security.TokenUtils;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
@@ -26,11 +28,10 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class SecurityService implements InitializingBean {
-    @Autowired
-    protected JRPServerProperties properties;
+    public static final String UTF_8 = "utf-8";
     //String wwwAuth = "Basic realm=\"Restricted Area\"";
     public static final String AUTHORIZATION = "Authorization";
-    Pattern whitePattern;
+    private Pattern whitePattern;
     /**
      * 已授权主机列表
      */
@@ -45,18 +46,22 @@ public class SecurityService implements InitializingBean {
      */
     private final Integer maxMethodLen = httpMethods.stream().map(String::length).max(Comparator.comparing(r -> r)).orElse(4);
 
+    @Autowired
+    protected JRPServerProperties properties;
     /**
-     * @param method          请求方法
+     * @param username      用户名
+     * @param password      密码
+     * @param method        请求方法
      * @param host          主机
      * @param authorization 授权信息：例如Basic bG9uZ3J1YW46TFJANjg4MDc4，admin:10010
      * @return 是否授权通过
      */
-    public boolean authorize(String method, String host, String authorization) {
+    public boolean authorize(String username, String password, String method, String host, String authorization) {
         boolean authorized = false;
         if (authorizedHostSet.contains(host)) {
             authorized = true;
         } else {
-            if (authorization != null && (this.checkHeaderAuth(method, host, authorization))) {
+            if (authorization != null && (this.checkHeaderAuth(username, password, method, host, authorization))) {
                 authorizedHostSet.add(host);
                 authorized = true;
             }
@@ -65,11 +70,12 @@ public class SecurityService implements InitializingBean {
     }
 
     /**
-     * @param host 主机
-     * @param data http文本信息
+     * @param clientRegister 客户端注册信息
+     * @param host           主机
+     * @param data           http文本信息
      * @return 是否授权通过
      */
-    public boolean authorizeHttp(String host, Buffer data) {
+    public boolean authorizeHttp(ClientRegister clientRegister, String host, Buffer data) {
         if (data == null) {
             return false;
         }
@@ -101,24 +107,21 @@ public class SecurityService implements InitializingBean {
             return false;
         }
         try {
-            return this.authorize(method,host, authorization, URLDecoder.decode(uri, "utf-8"));
+            boolean authorized = whitePattern.matcher(URLDecoder.decode(uri, UTF_8)).matches();
+            String username = clientRegister.getUsername();
+            String password = clientRegister.getPassword();
+            if (!StringUtils.hasText(username) || !StringUtils.hasText(password)) {
+                username = properties.getUsername();
+                password = properties.getPassword();
+            }
+            if (!StringUtils.hasText(username) || !StringUtils.hasText(password)) {
+                //如果客户端和服务端都没有配置用户名和密码，不做验证。
+                return true;
+            }
+            return authorized || this.authorize(username, password, method, host, authorization);
         } catch (UnsupportedEncodingException e) {
             return false;
         }
-    }
-
-    /**
-     * @param method        请求方法
-     * @param host          主机
-     * @param authorization 授权信息：例如Basic bG9uZ3J1YW46TFJANjg4MDc4，admin:10010
-     * @return 是否授权通过
-     */
-    public boolean authorize(String method, String host, String authorization, String uri) {
-        boolean authorized = whitePattern.matcher(uri).matches();
-        if (!authorized) {
-            authorized = this.authorize(method, host, authorization);
-        }
-        return authorized;
     }
 
     /**
@@ -157,16 +160,18 @@ public class SecurityService implements InitializingBean {
     /**
      * 验证认证信息是否有效
      *
-     * @param method 方法
-     * @param host   主机ip
-     * @param auth   授权信息，类似Authorization: Basic bG9uZ3J1YW46TFJANjg4MDc4
+     * @param username 用户名
+     * @param password 密码
+     * @param method   方法
+     * @param host     主机ip
+     * @param auth     授权信息，类似Authorization: Basic bG9uZ3J1YW46TFJANjg4MDc4
      * @return 检查认证结果
      */
-    public boolean checkHeaderAuth(String method, String host, String auth) {
+    public boolean checkHeaderAuth(String username, String password, String method, String host, String auth) {
         try {
             if ((auth != null) && (auth.length() > 6)) {
                 AuthInfo authInfo = getAuthInfo(auth);
-                String HA1 = TokenUtils.MD5(properties.getUsername() + ":" + authInfo.getRealm() + ":" + properties.getPassword());
+                String HA1 = TokenUtils.MD5(username + ":" + authInfo.getRealm() + ":" + password);
                 String nonce = getNonce(host);
                 if (!nonce.equals(authInfo.getNonce())) {
                     return false;
@@ -178,7 +183,7 @@ public class SecurityService implements InitializingBean {
                 return responseValid.equals(authInfo.getResponse());
             }
         } catch (Exception e) {
-            log.error("检查认证信息异常：{}",e.getMessage(),e);
+            log.error("检查认证信息异常：{}", e.getMessage(), e);
         }
         return false;
     }
@@ -194,11 +199,11 @@ public class SecurityService implements InitializingBean {
         if (auth != null) {
             //内容为： Digest username="admin", realm="jrp-auth@example.org", nonce="e9fbd885ad82a440b0879941e67447d3", uri="/", algorithm=MD5, response="b00144c208ac431dfb6deb6b9f0276cb", opaque="zpjmcNA626xb3kJF0v/kPg==", qop=auth, nc=00000002, cnonce="562de37a0569d379"
             for (String kv : auth.split(",")) {
-                while (kv.startsWith(" ")){
+                while (kv.startsWith(" ")) {
                     kv = kv.substring(kv.indexOf(" ") + 1);
                 }
                 int blankIndex = kv.indexOf(" ");
-                if(blankIndex>0&&kv.indexOf("=")> blankIndex){
+                if (blankIndex > 0 && kv.indexOf("=") > blankIndex) {
                     kv = kv.substring(blankIndex + 1);
                 }
                 String key = kv.substring(0, kv.indexOf("=")).trim();
@@ -269,15 +274,16 @@ public class SecurityService implements InitializingBean {
 
     /**
      * 判断是否可转为TCP请求
+     *
      * @param data 请求信息
      * @return true-可转为TCP请求，false-不可转为TCP请求
      */
     public boolean canToNetSocket(String data) {
-        return data.startsWith(HttpMethod.CONNECT.name()) || (data.startsWith(HttpMethod.GET.name())&&data.contains("connection: upgrade"));
+        return data.startsWith(HttpMethod.CONNECT.name()) || (data.startsWith(HttpMethod.GET.name()) && data.contains("connection: upgrade"));
     }
 
     @Override
-    public void afterPropertiesSet(){
+    public void afterPropertiesSet() {
         whitePattern = Pattern.compile(properties.getWhiteUrl());
     }
 }

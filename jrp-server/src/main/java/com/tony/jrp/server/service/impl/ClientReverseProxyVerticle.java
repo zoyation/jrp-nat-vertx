@@ -9,6 +9,9 @@ import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.datagram.DatagramPacket;
+import io.vertx.core.datagram.DatagramSocket;
+import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.net.NetServer;
 import io.vertx.core.net.NetServerOptions;
@@ -51,11 +54,18 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
      * 持有和内网代理服务器的连接，收到客户端请求消息后，通知内网代理服务器
      */
     private final ServerWebSocket serverSocket;
-
     /**
      * 用户tcp请求客户端socket
      */
     private final Map<String, NetSocket> clientTcpSocketMap = new ConcurrentHashMap<>();
+    /**
+     * udp对象
+     */
+    DatagramSocket datagramSocket;
+    /**
+     * 用户udp请求客户端package
+     */
+    private final Map<String, DatagramPacket> clientUdpPackageMap = new ConcurrentHashMap<>();
     /**
      * 所有代理Verticle
      */
@@ -84,20 +94,34 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
             msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
             realData = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen, data.length());
             NetSocket clientNetSocket = clientTcpSocketMap.get(clientAddress);
+            DatagramPacket clientDatagramPacket = clientUdpPackageMap.get(clientAddress);
             boolean closeMsg = realData.toString().endsWith(JRPMsgType.CLOSE.getCode());
-            if (clientNetSocket != null) {
+            if (clientNetSocket != null||clientDatagramPacket!=null) {
                 if (closeMsg) {
-                    log.debug("收到内网代理服务返回的关闭信息[{}]，关闭TCP连接。", clientAddress);
-                    clientTcpSocketMap.remove(clientAddress);
-                    clientNetSocket.close();
+                    log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", clientAddress);
+                    if(clientNetSocket!=null){
+                        clientTcpSocketMap.remove(clientAddress);
+                        clientNetSocket.close();
+                    }
+                    //移除udp缓存
+                    if(clientDatagramPacket!=null){
+                        clientUdpPackageMap.remove(clientAddress);
+                    }
                 } else {
-                    log.debug("收到内网代理服务返回的TCP信息并返回给客户端[{}]。", clientAddress);
-                    clientNetSocket.write(realData);
-                    if (clientNetSocket.writeQueueFull()) {
-                        clientNetSocket.pause();
-                        clientNetSocket.drainHandler(done -> {
-                            clientNetSocket.resume();
-                        });
+                    log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", clientAddress);
+                    if(clientNetSocket!=null){
+                        clientNetSocket.write(realData);
+                        if (clientNetSocket.writeQueueFull()) {
+                            clientNetSocket.pause();
+                            clientNetSocket.drainHandler(done -> {
+                                clientNetSocket.resume();
+                            });
+                        }
+                    }
+                    //发送udp数据
+                    if(clientDatagramPacket!=null){
+                        SocketAddress sender = clientDatagramPacket.sender();
+                        datagramSocket.send(realData,sender.port(),sender.host());
                     }
                 }
             } else if (closeMsg) {
@@ -122,12 +146,10 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
                 case TCP: {
                     AbstractVerticle tcpVerticle = new AbstractVerticle() {
                         NetServer server;
-
                         @Override
                         public void start() {
                             server = initTcpProxy(clientProxy);
                         }
-
                         @Override
                         public void stop() {
                             server.close();
@@ -137,7 +159,22 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
                     tcpFuture.onSuccess(id -> proxyVerticleMap.put(remotePort, tcpVerticle)).onFailure(Throwable::printStackTrace);
                     break;
                 }
-                case UDP:
+                case UDP: {
+                    AbstractVerticle udpVerticle = new AbstractVerticle() {
+                        DatagramSocket server;
+                        @Override
+                        public void start() {
+                            server = initUdpProxy(clientProxy);
+                        }
+                        @Override
+                        public void stop() {
+                            server.close();
+                        }
+                    };
+                    Future<String> tcpFuture = vertx.deployVerticle(udpVerticle);
+                    tcpFuture.onSuccess(id -> proxyVerticleMap.put(remotePort, udpVerticle)).onFailure(Throwable::printStackTrace);
+                    break;
+                }
                 case SOCKS4:
                 case SOCKS5:
                 default:
@@ -146,6 +183,11 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
         }
     }
 
+    /**
+     * 初始化tcp穿透
+     * @param clientProxy tcp穿透
+     * @return tcp服务对象
+     */
     private NetServer initTcpProxy(ClientProxy clientProxy) {
         Integer remotePort = clientProxy.getRemote_port();
         // 创建TCP服务器
@@ -197,7 +239,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
                     //首次访问或者首次验证都需要走HTTP接口
                     if (securityService.isHTTPRequest(data)) {
                         //尝试HTTP用户名密码信息验证
-                        if (securityService.authorizeHttp(host, data)) {
+                        if (securityService.authorizeHttp(clientRegister,host, data)) {
                             if (httpFlag) {
                                 log.debug("HTTP客户端[{}]请求验证通过，开始转发消息!", clientAddress);
                                 clientTcpSocketMap.put(clientAddress, clientSocket);
@@ -266,7 +308,39 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
             }
         });
     }
-
+    /**
+     * 初始化udp穿透
+     *
+     * @param clientProxy udp穿透
+     * @return tcp服务对象
+     */
+    private DatagramSocket initUdpProxy(ClientProxy clientProxy) {
+        Integer remotePort = clientProxy.getRemote_port();
+        // 创建TCP服务器
+        DatagramSocketOptions options = new DatagramSocketOptions();
+        options.setReceiveBufferSize(BUFFER_SIZE);
+        options.setSendBufferSize(BUFFER_SIZE);
+        datagramSocket = vertx.createDatagramSocket(options);
+        datagramSocket.exceptionHandler(e->{
+            log.error("UDP异常:{}!", e.getMessage(),e);
+        });
+        datagramSocket.handler(packet -> {
+            SocketAddress socketAddress = packet.sender();
+            log.debug("[{}] 收到UDP数据!", socketAddress.toString());
+            String clientAddress = socketAddress.toString();
+            //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
+            String msgId = remotePort.toString().length() + remotePort.toString() + clientAddress.length() + clientAddress;
+            clientUdpPackageMap.put(clientAddress, packet);
+            serverSocket.write(Buffer.buffer(msgId).appendBuffer(packet.data()));
+        });
+        return datagramSocket.listen(remotePort, "*",(res) -> {
+            if (res.succeeded()) {
+                log.info("[{}]内网穿透代理服务启动成功，代理端口：{}。", clientProxy.getType().name(), remotePort);
+            } else {
+                log.error("端口[{}]-[{}]内网穿透代理服务启动失败：{}", remotePort, clientProxy.getType().name(), res.cause().getMessage(), res.cause());
+            }
+        });
+    }
     @Override
     public void stop() {
         String ports = proxyVerticleMap.keySet().stream().map(Object::toString).collect(Collectors.joining(","));

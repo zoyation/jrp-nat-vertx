@@ -14,11 +14,11 @@ public class ProxyClientConfig implements Serializable {
     /**
      * 路径
      */
-    private String path = "/";
+    private String path = "jrp-client";
     /**
      * 端口
      */
-    private Integer port = 80;
+    private Integer port = 8000;
     /**
      * 内网穿透，需要进行服务器中转代理服务配置
      */
