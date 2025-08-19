@@ -131,22 +131,20 @@ public class ProxyClientManager implements InitializingBean {
             log.info("begin start server...");
         }
         String path = newConfig.getPath();
-        if(path.endsWith("/")){
-            path = path.substring(0,path.length()-1);
+        if (path.endsWith("/")) {
+            path = path.substring(0, path.length() - 1);
         }
-        if(!path.startsWith("/")){
-            path = "/"+path;
+        if (!path.startsWith("/")) {
+            path = "/" + path;
         }
 
         Integer port = newConfig.getPort();
         HttpServer server = vertx.createHttpServer();
         Router router = Router.router(vertx);
         StaticHandler dist = StaticHandler.create("dist");
-        String webUrl = path+"/web";
-        router.route(HttpMethod.GET,"/").handler(ctx -> {
-            ctx.redirect(webUrl);
-        });
-        router.route(HttpMethod.GET,webUrl+"/*").handler(dist);
+        String webUrl = path + "/web";
+        router.route(HttpMethod.GET, "/").handler(ctx -> ctx.redirect(webUrl));
+        router.route(HttpMethod.GET, webUrl + "/*").handler(dist);
         //获取配置信息
         router.route(HttpMethod.GET, path + "/config/list").handler(ctx -> configService.list(ctx));
         //保存配置信息
@@ -159,7 +157,7 @@ public class ProxyClientManager implements InitializingBean {
         server.requestHandler(router);
         server.listen(port);
         if (log.isInfoEnabled()) {
-            log.info("start server success，可浏览器访问[{http://127.0.0.1:{}{}}]进行穿透配置。",port,webUrl);
+            log.info("start server success，可浏览器访问[{http://127.0.0.1:{}{}}]进行穿透配置。", port, webUrl);
         }
         return server;
     }
@@ -279,10 +277,18 @@ public class ProxyClientManager implements InitializingBean {
                                         try {
                                             if (data.toString().equals(JRPMsgType.CLOSE.getCode())) {
                                                 NetSocket netSocket = netSocketMap.get(clientId);
-                                                if (netSocket != null) {
-                                                    log.debug("收到断开连接请求，断开TCP连接[{}]。", clientId);
-                                                    netSocketMap.remove(clientId);
-                                                    netSocket.close();
+                                                DatagramSocket datagramSocket = datagramSocketMap.get(clientId);
+                                                if (netSocket != null || datagramSocket != null) {
+                                                    if (netSocket != null) {
+                                                        log.debug("收到断开连接请求，关闭TCP连接[{}]。", clientId);
+                                                        netSocketMap.remove(clientId);
+                                                        netSocket.close();
+                                                    }
+                                                    if (datagramSocket != null) {
+                                                        log.debug("收到断开连接请求，关闭UDP连接[{}]。", clientId);
+                                                        datagramSocketMap.remove(clientId);
+                                                        datagramSocket.close();
+                                                    }
                                                 } else {
                                                     log.warn("收到断开连接请求，未找到连接[{}]对应netSocket。", clientId);
                                                 }
@@ -491,27 +497,12 @@ public class ProxyClientManager implements InitializingBean {
                 NetSocket netSocket = netSocketMap.get(clientId);
                 if (netSocket != null) {
                     //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                    netSocket.write(data);
-                    if (netSocket.writeQueueFull()) {
-                        netSocket.pause();
-                        NetSocket finalNetSocket = netSocket;
-                        netSocket.drainHandler((done) -> {
-                            finalNetSocket.resume();
-                        });
-                    }
+                    sendTcpData(data, netSocket);
                 } else {
                     synchronized (netSocketMap) {
                         netSocket = netSocketMap.get(clientId);
                         if (netSocket != null) {
-                            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                            netSocket.write(data);
-                            if (netSocket.writeQueueFull()) {
-                                netSocket.pause();
-                                NetSocket finalNetSocket = netSocket;
-                                netSocket.drainHandler((done) -> {
-                                    finalNetSocket.resume();
-                                });
-                            }
+                            sendTcpData(data, netSocket);
                         } else {
                             log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
                             CountDownLatch downLatch = new CountDownLatch(1);
@@ -526,9 +517,7 @@ public class ProxyClientManager implements InitializingBean {
                                         NetSocket proxySocket = asyncResult.result();
                                         proxySocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
                                         netSocketMap.put(clientId, proxySocket);
-                                        proxySocket.exceptionHandler(e -> {
-                                            log.debug("代理转发服务异常：{}", e.getMessage(), e);
-                                        });
+                                        proxySocket.exceptionHandler(e -> log.debug("代理转发服务异常：{}", e.getMessage(), e));
                                         proxySocket.closeHandler(ch -> {
                                             if (registerWebSocket != null && netSocketMap.remove(clientId) != null) {
                                                 log.debug("客户端[{}]对应的内容请求关闭！", clientId);
@@ -554,7 +543,8 @@ public class ProxyClientManager implements InitializingBean {
                                         log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());
                                     }
                                 } catch (Exception e) {
-                                    log.error("初始化转发服务异常：{}", e.getMessage(), e);
+                                    log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);
+                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
                                 } finally {
                                     downLatch.countDown();
                                 }
@@ -562,40 +552,26 @@ public class ProxyClientManager implements InitializingBean {
                             try {
                                 downLatch.await();
                             } catch (InterruptedException e) {
-                                log.error("转发服务连接处理异常：{}", e.getMessage(), e);
+                                log.error("转发服务连接处理异常：{}，发送关闭消息给服务端", e.getMessage(), e);
+                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
                             }
                         }
                     }
                 }
                 break;
             }
-            case UDP:{
+            case UDP: {
                 final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
                 DatagramSocket netSocket = datagramSocketMap.get(clientId);
                 if (netSocket != null) {
                     //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                    netSocket.send(data,originPort,originHost,rs->{
-                        if(rs.failed()){
-                            Throwable e = rs.cause();
-                            log.error("代理转发服务异常：{}", e.getMessage(), e);
-                            if (registerWebSocket != null && datagramSocketMap.get(clientId) != null) {
-                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
-                            }
-                        }
-                    });
+                    sendUdpData(msgId, clientId, data, netSocket, originPort, originHost);
                 } else {
                     synchronized (datagramSocketMap) {
                         netSocket = datagramSocketMap.get(clientId);
                         if (netSocket != null) {
                             //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                            netSocket.send(data,originPort,originHost,rs->{
-                                if(rs.succeeded()){
-
-                                }else{
-                                    Throwable e = rs.cause();
-                                    log.debug("代理转发服务异常：{}", e.getMessage(), e);
-                                }
-                            });
+                            sendUdpData(msgId, clientId, data, netSocket, originPort, originHost);
                         } else {
                             log.info("收到UPD数据[{}]，准备发送到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
                             CountDownLatch downLatch = new CountDownLatch(1);
@@ -604,28 +580,30 @@ public class ProxyClientManager implements InitializingBean {
                             clientOptions.setReceiveBufferSize(BUFFER_SIZE);
                             clientOptions.setSendBufferSize(BUFFER_SIZE);
                             DatagramSocket netClient = vertx.createDatagramSocket(clientOptions);
-                            netClient.exceptionHandler(e->{
-                                log.error("代理转发服务异常：{}", e.getMessage(), e);
-                                if (registerWebSocket != null && datagramSocketMap.get(clientId) != null) {
-                                    log.debug("客户端[{}]对应的内容异常！", clientId);
-                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
-                                }
+                            netClient.exceptionHandler(e -> {
+                                log.error("转发udp消息socket异常：{}，发送关闭信息给服务端", e.getMessage(), e);
+                                datagramSocketMap.remove(clientId);
+                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
                             });
-                            netClient.handler(socket->{
-                                log.debug("原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
+                            netClient.handler(socket -> {
+                                log.debug("udp原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
                                 registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(socket.data()));
                             });
-                            netClient.send(data,originPort,originHost,rs->{
-                                if(rs.failed()){
+                            netClient.send(data, originPort, originHost, rs -> {
+                                if (rs.succeeded()) {
+                                    datagramSocketMap.put(clientId, netClient);
+                                } else {
                                     Throwable e = rs.cause();
-                                    log.error("代理转发数据异常：{}", e.getMessage(), e);
+                                    log.error("转发udp消息到原始服务异常：{}，发送关闭信息给服务端", e.getMessage(), e);
                                     registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
                                 }
                             });
                             try {
                                 downLatch.await();
                             } catch (InterruptedException e) {
-                                log.error("转发服务连接处理异常：{}", e.getMessage(), e);
+                                log.error("udp转发服务连接处理异常：{}，发送关闭信息给服务端", e.getMessage(), e);
+                                datagramSocketMap.remove(clientId);
+                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
                             }
                         }
                     }
@@ -633,6 +611,35 @@ public class ProxyClientManager implements InitializingBean {
                 break;
             }
         }
+    }
+
+    private static void sendTcpData(Buffer data, NetSocket netSocket) {
+        netSocket.write(data);
+        if (netSocket.writeQueueFull()) {
+            netSocket.pause();
+            netSocket.drainHandler((done) -> netSocket.resume());
+        }
+    }
+
+    /**
+     * 发送UDP数据
+     *
+     * @param msgId      消息ID
+     * @param clientId   客户端ID
+     * @param data       数据
+     * @param netSocket  数据发送对象
+     * @param originPort 原始服务端口
+     * @param originHost 原始服务主机
+     */
+    private void sendUdpData(String msgId, String clientId, Buffer data, DatagramSocket netSocket, int originPort, String originHost) {
+        netSocket.send(data, originPort, originHost, rs -> {
+            if (rs.failed()) {
+                Throwable e = rs.cause();
+                log.error("转发udp消息到原始服务异常：{}，发送关闭信息给服务端", e.getMessage(), e);
+                datagramSocketMap.remove(clientId);
+                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+            }
+        });
     }
 }
 

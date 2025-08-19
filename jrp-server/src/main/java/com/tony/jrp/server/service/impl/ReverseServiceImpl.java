@@ -4,6 +4,7 @@ import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.utils.PortChecker;
 import com.tony.jrp.server.service.IReverseService;
+import com.tony.jrp.server.verticle.ClientReverseProxyVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
@@ -66,29 +67,29 @@ public class ReverseServiceImpl implements IReverseService {
                 CountDownLatch countDownLatch = new CountDownLatch(1);
                 AtomicBoolean result = new AtomicBoolean();
                 try {
-                    final ClientReverseProxyVerticle newClientReverseProxyVerticle = new ClientReverseProxyVerticle(clientRegister, webSocket, vertx, securityService);
+                    final ClientReverseProxyVerticle newClientReverseProxyVerticle = new ClientReverseProxyVerticle(clientRegister, webSocket, securityService);
                     reverseProxyMap.put(webSocket.textHandlerID(), newClientReverseProxyVerticle);
                     proxies.forEach(r -> allPorts.add(r.getRemote_port()));
                     vertx.deployVerticle(newClientReverseProxyVerticle).onSuccess(id -> {
                         result.set(true);
                         countDownLatch.countDown();
                     }).onFailure(e -> {
-                        log.error("内网穿透代理异常：{}",e.getMessage(),e);
+                        log.error("内网穿透代理异常：{}", e.getMessage(), e);
                         result.set(false);
                         countDownLatch.countDown();
                     });
                 } catch (Exception e) {
-                    log.error("初始化内网穿透代理异常：{}",e.getMessage(),e);
+                    log.error("初始化内网穿透代理异常：{}", e.getMessage(), e);
                     result.set(false);
                     countDownLatch.countDown();
                 }
-                try{
+                try {
                     boolean countDown = countDownLatch.await(10, TimeUnit.SECONDS);
-                    if(!countDown){
+                    if (!countDown) {
                         log.error("初始化内网穿透代理超时！");
                     }
                     result.set(countDown);
-                }catch (Exception e){
+                } catch (Exception e) {
                     result.set(false);
                 }
                 return result.get();

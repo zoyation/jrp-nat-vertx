@@ -56,6 +56,7 @@
                                         <el-select v-model="row.type" size="large" class="table-select">
                                             <el-option label="HTTP协议" value="HTTP"/>
                                             <el-option label="TCP协议" value="TCP"/>
+                                            <el-option label="UDP协议" value="UDP"/>
                                         </el-select>
                                     </el-form-item>
                                 </template>
