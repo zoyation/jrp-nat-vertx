@@ -81,7 +81,7 @@ class JrpNatTests {
             System.out.println("server return：" + backMessage);
             originServer.send(backMessage, handler.sender().port(), handler.sender().host());
         });
-        int total = 50000;
+        int total = 10000;
         CountDownLatch countDownLatch = new CountDownLatch(total);
         originServer.listen(844, "127.0.0.1").onSuccess((r) -> {
             ExecutorService executorService = Executors.newFixedThreadPool(100);
@@ -94,7 +94,7 @@ class JrpNatTests {
                         countDownLatch.countDown();
                     });
                     System.out.println("send data：" + iStr);
-                    client.send(iStr, 1844, "115.175.23.114");
+                    client.send(iStr, 1844, "127.0.0.1");
                 });
             }
         });

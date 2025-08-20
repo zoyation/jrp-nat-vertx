@@ -15,10 +15,7 @@ import org.springframework.util.StringUtils;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -48,6 +45,7 @@ public class SecurityService implements InitializingBean {
 
     @Autowired
     protected JRPServerProperties properties;
+
     /**
      * @param username      用户名
      * @param password      密码
@@ -108,20 +106,36 @@ public class SecurityService implements InitializingBean {
         }
         try {
             boolean authorized = whitePattern.matcher(URLDecoder.decode(uri, UTF_8)).matches();
-            String username = clientRegister.getUsername();
-            String password = clientRegister.getPassword();
-            if (!StringUtils.hasText(username) || !StringUtils.hasText(password)) {
-                username = properties.getUsername();
-                password = properties.getPassword();
-            }
-            if (!StringUtils.hasText(username) || !StringUtils.hasText(password)) {
-                //如果客户端和服务端都没有配置用户名和密码，不做验证。
+            if (authorized) {
                 return true;
             }
-            return authorized || this.authorize(username, password, method, host, authorization);
+            return checkHttpAuth(clientRegister, host, method, authorization);
         } catch (UnsupportedEncodingException e) {
             return false;
         }
+    }
+
+    /**
+     * 检查http请求的授权信息
+     *
+     * @param clientRegister 客户端注册信息
+     * @param host           主机
+     * @param method         请求方法
+     * @param authorization  授权信息
+     * @return 是否授权通过
+     */
+    public boolean checkHttpAuth(ClientRegister clientRegister, String host, String method, String authorization) {
+        String username = clientRegister.getUsername();
+        String password = clientRegister.getPassword();
+        if (!StringUtils.hasText(username) || !StringUtils.hasText(password)) {
+            username = properties.getUsername();
+            password = properties.getPassword();
+        }
+        if (!StringUtils.hasText(username) || !StringUtils.hasText(password)) {
+            //如果客户端和服务端都没有配置用户名和密码，不做验证。
+            return true;
+        }
+        return this.authorize(username, password, method, host, authorization);
     }
 
     /**
@@ -155,6 +169,21 @@ public class SecurityService implements InitializingBean {
                 "Expires: 0\r\n" +
                 "www-authenticate: " + getWWWAuthenticate(host) + "\r\n" +
                 "\r\n";
+    }
+
+    /**
+     * 返回TCP认证报文
+     *
+     * @param host 主机名称、IP
+     * @return 认证报文
+     */
+    public Map<String, String> getAuthenticateHead(String host) {
+        Map<String, String> heads = new HashMap<>();
+        heads.put("Cache-Control", "no-cache, no-store, must-revalidate");
+        heads.put("Pragma", "no-cache");
+        heads.put("Expires", "0");
+        heads.put("www-authenticate", getWWWAuthenticate(host));
+        return heads;
     }
 
     /**

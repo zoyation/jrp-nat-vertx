@@ -7,6 +7,13 @@
       "proxy_pass": "http://127.0.0.1:8000",
       "type": "HTTP",
       "remote_port": 8001
+    },
+    {
+      "id": null,
+      "name": "测试2",
+      "proxy_pass": "127.0.0.1:844",
+      "type": "UDP",
+      "remote_port": 1844
     }
   ]
 }
