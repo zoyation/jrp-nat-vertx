@@ -1,8 +1,10 @@
 package com.jproxy;
 
 import io.vertx.core.Vertx;
+import io.vertx.core.VertxOptions;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramSocket;
+import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.net.NetClient;
@@ -13,8 +15,10 @@ import io.vertx.ext.web.Router;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 //@SpringBootTest(classes = ProxyApplication.class)
 @Slf4j
@@ -25,7 +29,7 @@ class JrpNatTests {
         Router router = Router.router(vertx);
 
         // 使用正则表达式匹配所有以"/api/"开头的路径
-        router.routeWithRegex("^(/api/)(uas|log)/.*").handler(rct->{
+        router.routeWithRegex("^(/api/)(uas|log)/.*").handler(rct -> {
             System.out.println(rct.request().path());
             System.out.println(rct.request().uri());
             rct.response().end();
@@ -68,27 +72,34 @@ class JrpNatTests {
 
     @Test
     void testUDPProxy() throws InterruptedException {
-        DatagramSocket originServer = Vertx.vertx().createDatagramSocket();
+        Vertx vertx = Vertx.vertx(new VertxOptions().setWorkerPoolSize(200).setEventLoopPoolSize(1000));
+        DatagramSocket originServer = vertx.createDatagramSocket();
         originServer.handler(handler -> {
             Buffer data = handler.data();
-            System.out.println("Origin receive：" + data);
+            System.out.println("client data：" + data);
             String backMessage = "Hello world " + data + "!";
-            System.out.println("Origin return：" + backMessage);
+            System.out.println("server return：" + backMessage);
             originServer.send(backMessage, handler.sender().port(), handler.sender().host());
         });
-        originServer.listen(844, "127.0.0.1");
-        ExecutorService executorService = Executors.newFixedThreadPool(10);
-        for (int i = 0; i < 10; i++) {
-            final String iStr = String.valueOf(i);
-            executorService.execute(() -> {
-                DatagramSocket client = Vertx.vertx().createDatagramSocket();
-                client.handler(handler -> {
-                    System.out.println("Client [" + client.localAddress().toString() + "-" + iStr + "] receive：" + handler.data());
+        int total = 50000;
+        CountDownLatch countDownLatch = new CountDownLatch(total);
+        originServer.listen(844, "127.0.0.1").onSuccess((r) -> {
+            ExecutorService executorService = Executors.newFixedThreadPool(100);
+            for (int i = 0; i < total; i++) {
+                final String iStr = String.valueOf(i);
+                executorService.execute(() -> {
+                    DatagramSocket client = vertx.createDatagramSocket(new DatagramSocketOptions().setReusePort(true));
+                    client.handler(handler -> {
+                        System.out.println("Client [" + client.localAddress().toString() + "-" + iStr + "] receive data：" + handler.data());
+                        countDownLatch.countDown();
+                    });
+                    System.out.println("send data：" + iStr);
+                    client.send(iStr, 1844, "115.175.23.114");
                 });
-                client.send(iStr, 84, "127.0.0.1");
-            });
-        }
-        Thread.sleep(Long.MAX_VALUE);
+            }
+        });
+        countDownLatch.await(600, TimeUnit.SECONDS);
+        System.out.println("all done");
     }
 
     @Test
@@ -109,8 +120,8 @@ class JrpNatTests {
             handler.write(Buffer.buffer("I'm server 2!"));
         }).listen(852, "127.0.0.1");
 
-        ExecutorService executorService = Executors.newFixedThreadPool(10);
-        for (int i = 0; i < 10; i++) {
+        ExecutorService executorService = Executors.newFixedThreadPool(50);
+        for (int i = 0; i < 1000; i++) {
             final String iStr = String.valueOf(i);
             executorService.execute(() -> {
                 HttpClient client = vertx.createHttpClient();

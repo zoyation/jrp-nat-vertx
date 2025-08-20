@@ -18,7 +18,11 @@
                     <!-- Remote Proxies -->
                     <el-card class="proxies-section">
                         <h2>内网穿透客户端-穿透配置</h2>
-                        <div>内网穿透状态：<span v-if="configData.success&&!changeFlag" :style="configData.success?'color:green':'color:red'">{{configData.message}}</span></div>
+                        <div>内网穿透状态：<span v-if="configData.success&&!changeFlag"
+                                                :style="configData.success?'color:green':'color:red'">{{configData.message}}</span>
+                            <el-button type="primary" @click="updateStatus" size="small" v-if="!changeFlag">刷新状态
+                            </el-button>
+                        </div>
                         <el-table
                                 :data="configData.remote_proxies"
                                 style="width: 100%"
@@ -29,7 +33,7 @@
                                     <el-form-item
                                             :prop="`remote_proxies[${$index}].name`"
                                             :rules="rules.name"
-                                            
+
                                     >
                                         <el-input v-model="row.name" size="large" class="table-input"/>
                                     </el-form-item>
@@ -40,7 +44,7 @@
                                     <el-form-item
                                             :prop="`remote_proxies[${$index}].proxy_pass`"
                                             :rules="rules.proxy_pass"
-                                            
+
                                     >
                                         <el-input v-model="row.proxy_pass" size="large" class="table-input"/>
                                     </el-form-item>
@@ -51,7 +55,7 @@
                                     <el-form-item
                                             :prop="`remote_proxies[${$index}].type`"
                                             :rules="rules.type"
-                                            
+
                                     >
                                         <el-select v-model="row.type" size="large" class="table-select">
                                             <el-option label="HTTP协议" value="HTTP"/>
@@ -66,19 +70,20 @@
                                     <el-form-item
                                             :prop="`remote_proxies[${$index}].remote_port`"
                                             :rules="rules.remote_port"
-                                            
+
                                     >
-                                        <el-input v-model.number="row.remote_port" type="number" :min="0" size="large" class="table-input"/>
+                                        <el-input v-model.number="row.remote_port" type="number" :min="0" size="large"
+                                                  class="table-input"/>
                                     </el-form-item>
                                 </template>
                             </el-table-column>
                             <el-table-column label="穿透外网访问地址">
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
-                                        <a 
-                                            :href="(row.type=='HTTP'?'http://':'tcp://') + configData.remoteHost + ':' + row.remote_port"
-                                            target="_blank"
-                                            style="color: #409eff; text-decoration: underline;"
+                                        <a
+                                                :href="(row.type=='HTTP'?'http://':'tcp://') + configData.remoteHost + ':' + row.remote_port"
+                                                target="_blank"
+                                                style="color: #409eff; text-decoration: underline;"
                                         >
                                             {{row.type=='HTTP'?'http://':'tcp://'}}{{configData.remoteHost+':'+row.remote_port}}
                                         </a>
@@ -109,23 +114,23 @@
 </template>
 
 <script setup>
-    import {ref, reactive, onMounted, onUnmounted} from 'vue';
+    import {ref, reactive, onMounted} from 'vue';
     import { ElMessage, ElMessageBox } from 'element-plus'
     import apiService from '@/services/api';
 
-    let statusInterval;
+    //let statusInterval;
 
     // 添加表单引用
     const proxyConfigFormRef = ref();
 
     onMounted(() => {
       fetchConfig();
-        statusInterval = setInterval(updateStatus, 2000);
+      updateStatus();
     });
 
-    onUnmounted(() => {
-      clearInterval(statusInterval);
-    });
+    //onUnmounted(() => {
+    //  clearInterval(statusInterval);
+    //});
 
     const configData = reactive({
       success: false,
@@ -182,9 +187,9 @@
     function updateStatus() {
         apiService.status()
         .then((data) => {
-        configData.success=data.success;
-        configData.message=data.message;
-        configData.remoteHost=data.remoteHost;
+            configData.success=data.success;
+            configData.message=data.message;
+            configData.remoteHost=data.remoteHost;
         });
     }
 
@@ -221,6 +226,7 @@
                 configData.success = false;
                 configData.message = '';
                 changeFlag.value=false;
+                updateStatus();
             }).catch(() => {
                 ElMessage({
                 type: 'info',
@@ -274,6 +280,9 @@
                         configData.success = false;
                         configData.message = '';
                         changeFlag.value=false;
+                        setTimeout(() => {
+                            updateStatus();
+                        },1500);
                     }).catch(() => {
                         ElMessage({
                         type: 'info',

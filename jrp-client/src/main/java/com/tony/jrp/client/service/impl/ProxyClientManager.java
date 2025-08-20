@@ -61,20 +61,27 @@ public class ProxyClientManager implements InitializingBean {
      */
     @Autowired
     protected ProxyClientProperties properties;
-    int registerPort;
-    String registerHost;
-    private HttpServer server;
     private final Object serverLock = new Object();
+    List<ClientProxy> clientProxyList = new ArrayList<>();
+    private HttpServer server;
+    private int registerPort;
+    private String registerHost;
+    private ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
+    private ScheduledFuture<?> registerSchedule = null;
+    private Integer reconnectionTimes = 0;
     //registerWebSocket为null，未注册
     private volatile WebSocket registerWebSocket = null;
     private Long pingTimerId = null;
-    List<ClientProxy> clientProxyList = new ArrayList<>();
-    String errorMessage = "";
+    private String errorMessage = "";
     private final Map<String, NetSocket> netSocketMap = new ConcurrentHashMap<>();
+    /**
+     * udp缓存
+     */
     private final Map<String, DatagramSocket> datagramSocketMap = new ConcurrentHashMap<>();
-    ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
-    private ScheduledFuture<?> registerSchedule = null;
-    private Integer reconnectionTimes = 0;
+    /**
+     * udp最新读或者写时间缓存
+     */
+    private final Map<String, Long> udpReadOrWriteTimeMap = new ConcurrentHashMap<>();
 
     @Data
     private static class RegisterStatus {
@@ -123,6 +130,20 @@ public class ProxyClientManager implements InitializingBean {
             }
             restartServer(newConfig);
             //eventBus.publish(CONFIG_CHANGE, json);
+        });
+        vertx.setPeriodic(1000, (id) -> {
+            //1秒能没有操作的进行清理
+            udpReadOrWriteTimeMap.entrySet().removeIf(entry -> {
+                String clientAddress = entry.getKey();
+                boolean timeout = entry.getValue() + 1000L < System.currentTimeMillis();
+                if (timeout) {
+                    DatagramSocket remove = datagramSocketMap.remove(clientAddress);
+                    if (remove != null) {
+                        remove.close();
+                    }
+                }
+                return timeout;
+            });
         });
     }
 
@@ -287,6 +308,7 @@ public class ProxyClientManager implements InitializingBean {
                                                     if (datagramSocket != null) {
                                                         log.debug("收到断开连接请求，关闭UDP连接[{}]。", clientId);
                                                         datagramSocketMap.remove(clientId);
+                                                        udpReadOrWriteTimeMap.remove(clientId);
                                                         datagramSocket.close();
                                                     }
                                                 } else {
@@ -449,8 +471,14 @@ public class ProxyClientManager implements InitializingBean {
                 pingTimerId = null;
             }
             if (!netSocketMap.isEmpty()) {
-                log.info("停止转发服务");
+                log.info("停止TCP转发服务");
                 netSocketMap.values().forEach(NetSocket::close);
+                netSocketMap.clear();
+            }
+            if (!datagramSocketMap.isEmpty()) {
+                log.info("停止UDP转发服务");
+                datagramSocketMap.values().forEach(DatagramSocket::close);
+                udpReadOrWriteTimeMap.clear();
             }
             if (registerWebSocket != null && !registerWebSocket.isClosed() && close) {
                 log.info("关闭registerWebSocket");
@@ -461,6 +489,8 @@ public class ProxyClientManager implements InitializingBean {
         } finally {
             registerWebSocket = null;
             netSocketMap.clear();
+            datagramSocketMap.clear();
+            udpReadOrWriteTimeMap.clear();
             promise.complete();
         }
         return promise.future();
@@ -565,13 +595,13 @@ public class ProxyClientManager implements InitializingBean {
                 DatagramSocket netSocket = datagramSocketMap.get(clientId);
                 if (netSocket != null) {
                     //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                    sendUdpData(msgId, clientId, data, netSocket, originPort, originHost);
+                    sendUdpData(clientId, data, netSocket, originPort, originHost);
                 } else {
                     synchronized (datagramSocketMap) {
                         netSocket = datagramSocketMap.get(clientId);
                         if (netSocket != null) {
                             //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                            sendUdpData(msgId, clientId, data, netSocket, originPort, originHost);
+                            sendUdpData(clientId, data, netSocket, originPort, originHost);
                         } else {
                             log.info("收到UPD数据[{}]，准备发送到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
                             CountDownLatch downLatch = new CountDownLatch(1);
@@ -579,11 +609,15 @@ public class ProxyClientManager implements InitializingBean {
                             DatagramSocketOptions clientOptions = new DatagramSocketOptions();
                             clientOptions.setReceiveBufferSize(BUFFER_SIZE);
                             clientOptions.setSendBufferSize(BUFFER_SIZE);
+                            clientOptions.setReusePort(true);
                             DatagramSocket netClient = vertx.createDatagramSocket(clientOptions);
                             netClient.exceptionHandler(e -> {
-                                log.error("转发udp消息socket异常：{}，发送关闭信息给服务端", e.getMessage(), e);
-                                datagramSocketMap.remove(clientId);
-                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+                                log.error("转发udp消息异常：{}", e.getMessage(), e);
+                                DatagramSocket remove = datagramSocketMap.remove(clientId);
+                                if (remove != null) {
+                                    remove.close();
+                                }
+                                udpReadOrWriteTimeMap.remove(clientId);
                             });
                             netClient.handler(socket -> {
                                 log.debug("udp原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
@@ -592,18 +626,19 @@ public class ProxyClientManager implements InitializingBean {
                             netClient.send(data, originPort, originHost, rs -> {
                                 if (rs.succeeded()) {
                                     datagramSocketMap.put(clientId, netClient);
+                                    udpReadOrWriteTimeMap.put(clientId, System.currentTimeMillis());
                                 } else {
                                     Throwable e = rs.cause();
-                                    log.error("转发udp消息到原始服务异常：{}，发送关闭信息给服务端", e.getMessage(), e);
-                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+                                    log.error("转发udp消息到原始服务异常：{}，数据：{}", e.getMessage(), data.toString(), e);
                                 }
+                                downLatch.countDown();
                             });
                             try {
-                                downLatch.await();
+                                downLatch.await(1, TimeUnit.SECONDS);
                             } catch (InterruptedException e) {
-                                log.error("udp转发服务连接处理异常：{}，发送关闭信息给服务端", e.getMessage(), e);
+                                log.error("udp转发服务连接处理异常：{}，删除缓存", e.getMessage(), e);
                                 datagramSocketMap.remove(clientId);
-                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+                                udpReadOrWriteTimeMap.remove(clientId);
                             }
                         }
                     }
@@ -624,20 +659,24 @@ public class ProxyClientManager implements InitializingBean {
     /**
      * 发送UDP数据
      *
-     * @param msgId      消息ID
      * @param clientId   客户端ID
      * @param data       数据
      * @param netSocket  数据发送对象
      * @param originPort 原始服务端口
      * @param originHost 原始服务主机
      */
-    private void sendUdpData(String msgId, String clientId, Buffer data, DatagramSocket netSocket, int originPort, String originHost) {
+    private void sendUdpData(String clientId, Buffer data, DatagramSocket netSocket, int originPort, String originHost) {
         netSocket.send(data, originPort, originHost, rs -> {
             if (rs.failed()) {
                 Throwable e = rs.cause();
-                log.error("转发udp消息到原始服务异常：{}，发送关闭信息给服务端", e.getMessage(), e);
-                datagramSocketMap.remove(clientId);
-                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
+                log.error("转发udp消息到原始服务异常：{}", e.getMessage(), e);
+                DatagramSocket remove = datagramSocketMap.remove(clientId);
+                if (remove != null) {
+                    remove.close();
+                }
+                udpReadOrWriteTimeMap.remove(clientId);
+            } else {
+                udpReadOrWriteTimeMap.put(clientId, System.currentTimeMillis());
             }
         });
     }

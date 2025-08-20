@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Launcher;
 import io.vertx.core.Promise;
+import io.vertx.core.VertxOptions;
 import io.vertx.core.json.jackson.DatabindCodec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
@@ -23,7 +24,14 @@ public class ClientApplication extends AbstractVerticle {
     public static void main(String[] args) {
         List<String> list = getVertxArgs(args, ClientApplication.class.getName());
         DatabindCodec.mapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        new Launcher().dispatch(list.toArray(new String[]{}));
+        new Launcher() {
+            @Override
+            public void beforeStartingVertx(VertxOptions options) {
+                options.setWorkerPoolSize(100);
+                options.setEventLoopPoolSize(200);
+                super.beforeStartingVertx(options);
+            }
+        }.dispatch(list.toArray(new String[]{}));
     }
 
     /**
@@ -41,9 +49,9 @@ public class ClientApplication extends AbstractVerticle {
             list.add(mainVerticle);
         } else if (args.length == 1 && (args[0].equals(START) || args[0].equals(RUN))) {
             list.add(mainVerticle);
-        }else if(args.length>1&& list.stream().anyMatch(r->r.startsWith("-Dvertx.id="))){
-            list.add(0,RUN);
-            list.add(1,mainVerticle);
+        } else if (args.length > 1 && list.stream().anyMatch(r -> r.startsWith("-Dvertx.id="))) {
+            list.add(0, RUN);
+            list.add(1, mainVerticle);
         }
         return list;
     }
@@ -54,7 +62,7 @@ public class ClientApplication extends AbstractVerticle {
         log.info("System file.encoding:{}", property);
         System.setProperty("file.encoding", "UTF-8");
         log.info("set file.encoding to UTF-8");
-        vertx.executeBlocking(()->{
+        vertx.executeBlocking(() -> {
             SpringApplication.run(ClientApplication.class, processArgs().toArray(new String[]{}));
             startPromise.complete();
             return true;
