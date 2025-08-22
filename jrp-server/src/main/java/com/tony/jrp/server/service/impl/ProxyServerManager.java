@@ -76,7 +76,7 @@ public class ProxyServerManager implements InitializingBean {
                 //401 Unauthorized
                 //www-authenticate: Basic realm="Restricted Area"
                 //authorization:Basic bG9uZ3J1YW46TFJANjg4MDc4
-                if (securityService.authorize(properties.getUsername(),properties.getPassword(),request.method().name(), host, authorization)) {
+                if (securityService.authorize(properties.getUsername(), properties.getPassword(), request.method().name(), host, authorization)) {
                     response.putHeader("content-type", "text/plain");
                     response.setStatusCode(HttpResponseStatus.OK.code());
                     response.end("Welcome to use jrp-server! Your WAN IP is [" + host + "]!");
@@ -135,7 +135,7 @@ public class ProxyServerManager implements InitializingBean {
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
                                         reverseService.stopReverseProxy(remove, serverWebSocket)
-                                                .onSuccess(proxySuccess -> log.info("{}！",proxySuccess))
+                                                .onSuccess(proxySuccess -> log.info("{}！", proxySuccess))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
                                     } else {
                                         log.warn("websocket[{}]关闭，没有代理信息！", remoteAddress);
