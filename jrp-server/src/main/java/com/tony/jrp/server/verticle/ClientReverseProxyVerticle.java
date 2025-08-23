@@ -24,9 +24,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
      * ”ip:端口“地址总长度数值对应字符串长度。
      */
     public static final int CLIENT_IP_PORT_LEN = 2;
-    public static final int IDLE_TIMEOUT = 10;
     public static final int WRITE_QUEUE_MAX_SIZE = 100;
-    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     /**
      * 持有和内网代理服务器的连接，收到客户端请求消息后，通知内网代理服务器
      */

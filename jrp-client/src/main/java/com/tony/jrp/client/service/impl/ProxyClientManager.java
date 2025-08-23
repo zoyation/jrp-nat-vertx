@@ -66,7 +66,7 @@ public class ProxyClientManager implements InitializingBean {
     private HttpServer server;
     private int registerPort;
     private String registerHost;
-    private ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
+    private final ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
     private ScheduledFuture<?> registerSchedule = null;
     private Integer reconnectionTimes = 0;
     //registerWebSocket为null，未注册

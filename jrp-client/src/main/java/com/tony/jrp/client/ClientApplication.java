@@ -24,14 +24,7 @@ public class ClientApplication extends AbstractVerticle {
     public static void main(String[] args) {
         List<String> list = getVertxArgs(args, ClientApplication.class.getName());
         DatabindCodec.mapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        new Launcher() {
-            @Override
-            public void beforeStartingVertx(VertxOptions options) {
-                options.setWorkerPoolSize(100);
-                options.setEventLoopPoolSize(200);
-                super.beforeStartingVertx(options);
-            }
-        }.dispatch(list.toArray(new String[]{}));
+        new Launcher().dispatch(list.toArray(new String[]{}));
     }
 
     /**

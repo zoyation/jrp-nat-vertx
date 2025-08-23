@@ -62,7 +62,7 @@ public class ReverseServiceImpl implements IReverseService {
                 }
             }
             if (!usedPort.isEmpty()) {
-                throw new IllegalArgumentException("端口[" + String.join(",", usedPort) + "]已被使用，请使用1024到49151中其它端口！");
+                throw new IllegalArgumentException("端口[" + String.join(",", usedPort) + "]已被使用，请使用"+MIN_PORT+"到"+MAX_PORT+"中其它端口！");
             } else {
                 CountDownLatch countDownLatch = new CountDownLatch(1);
                 AtomicBoolean result = new AtomicBoolean();
@@ -98,10 +98,10 @@ public class ReverseServiceImpl implements IReverseService {
     }
 
     @Override
-    public Future<String> stopReverseProxy(ClientRegister clientRegister, ServerWebSocket webSocket) {
+    public Future<String> stopReverseProxy(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
         Promise<String> promise = Promise.promise();
-        if (clientRegister != null) {
-            clientRegister.getProxies().forEach(r -> allPorts.remove(r.getRemote_port()));
+        if (clientProxyList != null) {
+            clientProxyList.forEach(r -> allPorts.remove(r.getRemote_port()));
             ClientReverseProxyVerticle clientReverseProxyVerticle = reverseProxyMap.remove(webSocket.textHandlerID());
             if (clientReverseProxyVerticle != null) {
                 try {

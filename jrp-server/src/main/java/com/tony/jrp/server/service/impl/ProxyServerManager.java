@@ -3,6 +3,8 @@ package com.tony.jrp.server.service.impl;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
 import com.tony.jrp.server.config.JRPServerProperties;
+import com.tony.jrp.server.model.RegisterInfo;
+import com.tony.jrp.server.service.IRegisterService;
 import com.tony.jrp.server.service.IReverseService;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.Vertx;
@@ -18,6 +20,8 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.sql.Timestamp;
+import java.time.OffsetTime;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,6 +34,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ProxyServerManager implements InitializingBean {
     public static final int IDLE_TIMEOUT = 10;
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
+    /**
+     * 上线
+     */
+    public static final int STATUS_ONLINE = 1;
+    /**
+     * 下线
+     */
+    public static final int STATUS_OFFLINE = 2;
     @Autowired
     protected Vertx vertx;
     /**
@@ -45,11 +57,13 @@ public class ProxyServerManager implements InitializingBean {
      */
     @Autowired
     protected IReverseService reverseService;
+    @Autowired
+    protected IRegisterService registerService;
 
     /**
      * 所有注册成功的内外穿透代理信息
      */
-    protected final Map<String, ClientRegister> registerMap = new ConcurrentHashMap<>();
+    protected final Map<String, RegisterInfo> registerMap = new ConcurrentHashMap<>();
 
     @Override
     public void afterPropertiesSet() {
@@ -100,17 +114,17 @@ public class ProxyServerManager implements InitializingBean {
             String textHandlerID = serverWebSocket.textHandlerID();
             serverWebSocket.handler(buffer -> {
                 if (buffer != null) {
-                    String registerInfo = buffer.toString();
+                    String registerJson = buffer.toString();
                     String prettily;
                     try {
-                        prettily = new JsonObject(registerInfo).encodePrettily();
+                        prettily = new JsonObject(registerJson).encodePrettily();
                         log.info("收到来自[{}]的服务注册信息:\r\n{}", remoteAddress, prettily);
                     } catch (Exception e) {
-                        log.error("收到来自[{}]的非法注册信息:\r\n{}", remoteAddress, registerInfo, e);
+                        log.error("收到来自[{}]的非法注册信息:\r\n{}", remoteAddress, registerJson, e);
                         serverWebSocket.close();
                         return;
                     }
-                    ClientRegister clientRegister = Json.decodeValue(registerInfo, ClientRegister.class);
+                    ClientRegister clientRegister = Json.decodeValue(registerJson, ClientRegister.class);
                     if (clientRegister != null && this.properties.getToken().equals(clientRegister.getToken())) {
                         reverseService.startReverseProxy(clientRegister, serverWebSocket).onSuccess(res -> {
                             long serverPing = 0;
@@ -131,12 +145,17 @@ public class ProxyServerManager implements InitializingBean {
                                 long finalServerPing = serverPing;
                                 serverWebSocket.closeHandler(handler -> {
                                     vertx.cancelTimer(finalServerPing);
-                                    ClientRegister remove = registerMap.remove(textHandlerID);
+                                    RegisterInfo remove = registerMap.remove(textHandlerID);
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
-                                        reverseService.stopReverseProxy(remove, serverWebSocket)
+                                        reverseService.stopReverseProxy(remove.getProxies(), serverWebSocket)
                                                 .onSuccess(proxySuccess -> log.info("{}！", proxySuccess))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
+                                        remove.setStatus(STATUS_OFFLINE);
+                                        remove.setOffline_time(new Timestamp(System.currentTimeMillis()));
+                                        remove.setRemark("连接关闭");
+                                        //更新注册信息
+                                        registerService.update(remove);
                                     } else {
                                         log.warn("websocket[{}]关闭，没有代理信息！", remoteAddress);
                                     }
@@ -147,7 +166,20 @@ public class ProxyServerManager implements InitializingBean {
                                 });
                                 log.info("来自[{}]的服务注册成功,textHandlerID[{}]:\r\n{}", remoteAddress, textHandlerID, prettily);
                                 serverWebSocket.write(Buffer.buffer(Json.encode(RegisterResult.success("注册成功！"))));
-                                registerMap.put(textHandlerID, clientRegister);
+                                RegisterInfo registerInfo = new RegisterInfo();
+                                registerInfo.setId(textHandlerID);
+                                registerInfo.setHost(remoteAddress.host());
+                                registerInfo.setPort(remoteAddress.port());
+                                registerInfo.setClient_id(clientRegister.getId());
+                                registerInfo.setName(clientRegister.getName());
+                                registerInfo.setToken(clientRegister.getToken());
+                                registerInfo.setUsername(clientRegister.getUsername());
+                                registerInfo.setPassword(clientRegister.getPassword());
+                                registerInfo.setProxies(clientRegister.getProxies());
+                                registerInfo.setRegister_time(new Timestamp(System.currentTimeMillis()));
+                                registerInfo.setStatus(STATUS_ONLINE);
+                                registerMap.put(textHandlerID, registerInfo);
+                                registerService.add(registerInfo);
                             } catch (Exception e) {
                                 log.error("来自[{}]的服务注册失败:{}", remoteAddress, e.getMessage(), e);
                                 if (serverPing > 0) {
@@ -158,7 +190,7 @@ public class ProxyServerManager implements InitializingBean {
                                     serverWebSocket.close();
                                 }
                                 log.warn("websocket[{}]注册异常，开始停止代理：{}", remoteAddress, clientRegister);
-                                reverseService.stopReverseProxy(clientRegister, serverWebSocket)
+                                reverseService.stopReverseProxy(clientRegister.getProxies(), serverWebSocket)
                                         .onSuccess(proxySuccess -> log.info("停止注册异常代理成功！"))
                                         .onFailure(err -> log.error("停止注册异常代理失败：{}", err.getMessage(), err));
                             }

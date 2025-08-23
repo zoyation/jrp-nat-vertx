@@ -14,6 +14,10 @@ public class ClientRegister {
      */
     private String id;
     /**
+     * 被代理客户端名称
+     */
+    private String name;
+    /**
      * 认证信息
      */
     private String token;

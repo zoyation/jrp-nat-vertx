@@ -131,7 +131,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    sudo systemctl start jrp-server.service
    ```
    4.验证服务状态：sudo systemctl status jrp-server.service
-10. 客户端linux开机启动配置： 
+11. 客户端linux开机启动配置： 
    1.jar包和配置文件放到/home/jrp-client目录下。
 
    2.创建文件 /etc/systemd/system/jrp-client.service，内容如下：
@@ -168,8 +168,8 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    1. 修改重连后提示端口占用问题。
    2. 客户端增加web配置界面，和直接改配置文件等效。
 ### 1.0.2版本
-1. 增加客户端自定义穿透成功后访问认证信息（用户名、密码，可选配置，未配置时统一使用服务端配置的认证信息进行认证）功能。
-2. 增加客户端穿透注册信息持久化到磁盘功能。
-3. 增加客户端配置信息存储到数据库功能。
+1. 客户端增加自定义穿透成功后访问认证信息（用户名、密码，可选配置，未配置时统一使用服务端配置的认证信息进行认证）功能。
+2. 服务端添加持久化客户端穿透注册信息到磁盘功能。
+3. 客户端增加配置信息存储到数据库功能。
 4. 增加UDP穿透功能。
 5. 代码结构优化。

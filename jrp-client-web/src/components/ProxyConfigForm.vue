@@ -81,11 +81,11 @@
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
                                         <a
-                                                :href="(row.type=='HTTP'?'http://':'tcp://') + configData.remoteHost + ':' + row.remote_port"
+                                                :href="(row.type.toLowerCase()+'://') + configData.remoteHost + ':' + row.remote_port"
                                                 target="_blank"
                                                 style="color: #409eff; text-decoration: underline;"
                                         >
-                                            {{row.type=='HTTP'?'http://':'tcp://'}}{{configData.remoteHost+':'+row.remote_port}}
+                                            {{row.type.toLowerCase()+'://'}}{{configData.remoteHost+':'+row.remote_port}}
                                         </a>
                                     </span>
                                 </template>
