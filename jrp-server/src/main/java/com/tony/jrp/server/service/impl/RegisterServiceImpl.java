@@ -20,6 +20,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.List;
 
 /**
  * 注册信息管理
@@ -38,6 +39,7 @@ public class RegisterServiceImpl implements IRegisterService, InitializingBean {
     @Override
     public void add(RegisterInfo registerInfo) {
         synchronized (CONFIG_PATH){
+            registerConfig.getReal_list().add(registerInfo);
             registerConfig.getRegister_list().add(registerInfo);
             try {
                 saveToFile(getConfigFilePath(),Json.encode(registerConfig));
@@ -51,6 +53,8 @@ public class RegisterServiceImpl implements IRegisterService, InitializingBean {
     public void update(RegisterInfo registerInfo) {
         synchronized (CONFIG_PATH){
             try {
+                List<RegisterInfo> realList = registerConfig.getReal_list();
+                realList.removeIf(r->r.getId().equals(registerInfo.getId()));
                 saveToFile(getConfigFilePath(),Json.encode(registerConfig));
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -78,7 +82,7 @@ public class RegisterServiceImpl implements IRegisterService, InitializingBean {
             try {
                 boolean newFile = configFile.createNewFile();
                 if (newFile) {
-                    saveToFile(configFilePath, "{\"max_client\":100,\"max_port_num\":100,\"register_list\":[]}");
+                    saveToFile(configFilePath, "{\"max_client\":100,\"max_port_num\":100,\"register_list\":[],\"real_list\":[]}");
                 }
             } catch (IOException e) {
                 throw new RuntimeException(e);

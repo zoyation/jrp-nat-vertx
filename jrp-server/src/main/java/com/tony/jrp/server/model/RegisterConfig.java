@@ -20,6 +20,10 @@ public class RegisterConfig {
      */
     private Integer max_port_num = 100;
     /**
+     * 所有实时注册列表
+     */
+    private List<RegisterInfo> real_list;
+    /**
      * 所有注册列表
      */
     private List<RegisterInfo> register_list;

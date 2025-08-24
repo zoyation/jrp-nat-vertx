@@ -71,7 +71,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
     ```
 4. window通过[start.bat](jrp-server/src/bin/start.bat)，linux通过[start.sh](jrp-server/src/bin/start.sh)
    启动内网穿透服务端（有外网ip和端口的服务器上启动）。
-5. 修改内网穿透客户端穿透代理配置参数config.json,目前主要支持HTTP、TCP:
+5. 修改内网穿透客户端穿透代理配置参数config.json,目前支持HTTP(websocket)、TCP(pg、mysql等数据库服务，windows远程)、UDP:
    ```
     {
      "path": "jrp-client",//代理服务配置管理服务HTTP访问路径

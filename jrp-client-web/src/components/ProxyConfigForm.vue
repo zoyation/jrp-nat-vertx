@@ -80,13 +80,17 @@
                             <el-table-column label="穿透外网访问地址">
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
-                                        <a
+                                        <a v-if="row.type=='HTTP'"
                                                 :href="(row.type.toLowerCase()+'://') + configData.remoteHost + ':' + row.remote_port"
                                                 target="_blank"
                                                 style="color: #409eff; text-decoration: underline;"
                                         >
                                             {{row.type.toLowerCase()+'://'}}{{configData.remoteHost+':'+row.remote_port}}
                                         </a>
+                                        <div v-if="row.type!='HTTP'"
+                                        >
+                                            {{configData.remoteHost+':'+row.remote_port}}
+                                        </div>
                                     </span>
                                 </template>
                             </el-table-column>
@@ -94,7 +98,6 @@
                                 <template #default="{ $index }">
                                     <el-button
                                             type="danger"
-                                            size="large"
                                             @click="removeProxy($index)"
                                     >删除
                                     </el-button>
