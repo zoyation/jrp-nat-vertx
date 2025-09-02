@@ -44,6 +44,16 @@
         </dependency>
         <dependency>
             <groupId>io.vertx</groupId>
+            <artifactId>vertx-redis-client</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
+            <artifactId>vertx-config-redis</artifactId>
+            <version>${vertx.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.vertx</groupId>
             <artifactId>vertx-config</artifactId>
             <version>${vertx.version}</version>
         </dependency>
@@ -56,11 +66,11 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>com.google.guava</groupId>-->
-<!--            <artifactId>guava</artifactId>-->
-<!--            <version>32.1.2-jre</version>-->
-<!--        </dependency>-->
+        <!--        <dependency>-->
+        <!--            <groupId>com.google.guava</groupId>-->
+        <!--            <artifactId>guava</artifactId>-->
+        <!--            <version>32.1.2-jre</version>-->
+        <!--        </dependency>-->
         <dependency>
             <groupId>com.tony</groupId>
             <artifactId>jrp-common</artifactId>
@@ -75,11 +85,11 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
         </dependency>
-<!--        <dependency>-->
-<!--            <groupId>org.springframework</groupId>-->
-<!--            <artifactId>spring-jdbc</artifactId>-->
-<!--            <version>6.0.12</version>-->
-<!--        </dependency>-->
+        <!--        <dependency>-->
+        <!--            <groupId>org.springframework</groupId>-->
+        <!--            <artifactId>spring-jdbc</artifactId>-->
+        <!--            <version>6.0.12</version>-->
+        <!--        </dependency>-->
     </dependencies>
     <build>
         <finalName>${project.artifactId}-${project.version}</finalName>
@@ -156,40 +166,40 @@
                     <skipTests>true</skipTests>
                 </configuration>
             </plugin>
-<!--            <plugin>-->
-<!--                <groupId>com.akathist.maven.plugins.launch4j</groupId>-->
-<!--                <artifactId>launch4j-maven-plugin</artifactId>-->
-<!--                <version>2.6.0</version>-->
-<!--                <executions>-->
-<!--                    <execution>-->
-<!--                        <id>launch4j-package</id>-->
-<!--                        <phase>package</phase>-->
-<!--                        <goals>-->
-<!--                            <goal>launch4j</goal>-->
-<!--                        </goals>-->
-<!--                    </execution>-->
-<!--                </executions>-->
-<!--                <configuration>-->
-<!--                    <headerType>console</headerType>-->
-<!--                    <outfile>${project.build.directory}/jrp-client.exe</outfile> &lt;!&ndash; 输出文件名 &ndash;&gt;-->
-<!--                    <jar>${project.build.directory}/${project.artifactId}-${project.version}.jar</jar>-->
-<!--                    <jre>-->
-<!--                        <minVersion>1.8.0</minVersion>-->
-<!--                        &lt;!&ndash; 如果需要打包 JRE，可以使用以下配置 &ndash;&gt;-->
-<!--                         <bundledJre64Bit>true</bundledJre64Bit>-->
-<!--                        &lt;!&ndash; <bundledJrePath>path/to/bundled/jre32</bundledJrePath> &ndash;&gt;-->
-<!--                         <path>./jre</path>   使用外部 JRE-->
-<!--                         <opts>-->
-<!--                             <opt>-Dfile.encoding=utf-8</opt>-->
-<!--                         </opts>-->
-<!--                        &lt;!&ndash; </opts> &ndash;&gt;-->
-<!--                    </jre>-->
-<!--                    <versionInfo> &lt;!&ndash; 版本信息 &ndash;&gt;-->
-<!--                        <fileVersion>1.0.0.1</fileVersion>-->
-<!--                        <txtFileVersion>Release 1.0</txtFileVersion>-->
-<!--                    </versionInfo>-->
-<!--                </configuration>-->
-<!--            </plugin>-->
+            <!--            <plugin>-->
+            <!--                <groupId>com.akathist.maven.plugins.launch4j</groupId>-->
+            <!--                <artifactId>launch4j-maven-plugin</artifactId>-->
+            <!--                <version>2.6.0</version>-->
+            <!--                <executions>-->
+            <!--                    <execution>-->
+            <!--                        <id>launch4j-package</id>-->
+            <!--                        <phase>package</phase>-->
+            <!--                        <goals>-->
+            <!--                            <goal>launch4j</goal>-->
+            <!--                        </goals>-->
+            <!--                    </execution>-->
+            <!--                </executions>-->
+            <!--                <configuration>-->
+            <!--                    <headerType>console</headerType>-->
+            <!--                    <outfile>${project.build.directory}/jrp-client.exe</outfile> &lt;!&ndash; 输出文件名 &ndash;&gt;-->
+            <!--                    <jar>${project.build.directory}/${project.artifactId}-${project.version}.jar</jar>-->
+            <!--                    <jre>-->
+            <!--                        <minVersion>1.8.0</minVersion>-->
+            <!--                        &lt;!&ndash; 如果需要打包 JRE，可以使用以下配置 &ndash;&gt;-->
+            <!--                         <bundledJre64Bit>true</bundledJre64Bit>-->
+            <!--                        &lt;!&ndash; <bundledJrePath>path/to/bundled/jre32</bundledJrePath> &ndash;&gt;-->
+            <!--                         <path>./jre</path>   使用外部 JRE-->
+            <!--                         <opts>-->
+            <!--                             <opt>-Dfile.encoding=utf-8</opt>-->
+            <!--                         </opts>-->
+            <!--                        &lt;!&ndash; </opts> &ndash;&gt;-->
+            <!--                    </jre>-->
+            <!--                    <versionInfo> &lt;!&ndash; 版本信息 &ndash;&gt;-->
+            <!--                        <fileVersion>1.0.0.1</fileVersion>-->
+            <!--                        <txtFileVersion>Release 1.0</txtFileVersion>-->
+            <!--                    </versionInfo>-->
+            <!--                </configuration>-->
+            <!--            </plugin>-->
         </plugins>
     </build>
     <profiles>

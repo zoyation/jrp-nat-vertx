@@ -1,6 +1,6 @@
 vertx:
   jrp:
-    #配置文件存储方式，目前只支持file
+    #配置文件存储方式，目前支持file和redis
     config-store-type: file
     #内网穿透代理服务注册地址，服务端启动时，会自动注册到内网穿透代理服务中
     register-address: 127.0.0.1:2000
@@ -12,6 +12,22 @@ vertx:
     username: client
     #穿透成功后，访问时的认证密码，如果没配置会使用服务端里面配置的认证信息。
     password: 10086
+    redis:
+      # 单机-STANDALONE,哨兵-SENTINEL,集群-CLUSTER,主从-REPLICATION
+      client-type: STANDALONE
+      # url地址，默认空，如果配置了会优先使用，格式：redis://[:password@]host:port[/database]
+      url: redis://127.0.0.1:6379
+      # 数据库编号 url没设置时或者集群模式时配置，不配置时默认0
+      database: 0
+      #  地址 url没设置时或者集群模式时配置，不配置时默认localhost
+      host: 127.0.0.1
+      # 端口 url没设置时或者集群模式时配置，不配置时默认6379
+      port: 6379
+      # 密码 url没设置时或者集群模式时配置，默认空
+      password:
+      # 集群模式时配置，不配时，默认空
+      nodes:
+        - 127.0.0.1:6379
 # 日志配置
 logging:
   level:

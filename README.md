@@ -68,6 +68,22 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
         username: client
         #穿透成功后，访问时的认证密码，如果没配置会使用服务端里面配置的认证信息。
         password: 10086
+        redis:
+          # 单机-STANDALONE,哨兵-SENTINEL,集群-CLUSTER,主从-REPLICATION
+          client-type: STANDALONE
+          # url地址，默认空，如果配置了会优先使用，格式：redis://[:password@]host:port[/database]
+          url: redis://127.0.0.1:6379
+          # 数据库编号 url没设置时或者集群模式时配置，不配置时默认0
+          database: 0
+          #  地址 url没设置时或者集群模式时配置，不配置时默认localhost
+          host: 127.0.0.1
+          # 端口 url没设置时或者集群模式时配置，不配置时默认6379
+          port: 6379
+          # 密码 url没设置时或者集群模式时配置，默认空
+          password:
+          # 集群模式时配置，不配时，默认空
+          nodes:
+            - 127.0.0.1:6379
     ```
 4. window通过[start.bat](jrp-server/src/bin/start.bat)，linux通过[start.sh](jrp-server/src/bin/start.sh)
    启动内网穿透服务端（有外网ip和端口的服务器上启动）。
@@ -117,7 +133,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    Type=simple
    User=root
    WorkingDirectory=/home/jrp-server
-   ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-server-1.0.2.jar >>/dev/null 2>&1 &
+   ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-server-1.0.2.jar
    Restart=on-failure
    RestartSec=10
    
@@ -170,6 +186,6 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 ### 1.0.2版本
 1. 客户端增加自定义穿透成功后访问认证信息（用户名、密码，可选配置，未配置时统一使用服务端配置的认证信息进行认证）功能。
 2. 服务端添加持久化客户端穿透注册信息到磁盘功能。
-3. 客户端增加配置信息存储到数据库功能。
+3. 客户端增加配置信息存储到redis功能。
 4. 增加UDP穿透功能。
 5. 代码结构优化。

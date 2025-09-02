@@ -184,7 +184,17 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     private void restartServer(JsonObject result) {
-        ProxyClientConfig newConfig = Json.decodeValue(result.toString(), ProxyClientConfig.class);
+        if (result == null) {
+            log.error("result is null");
+            return;
+        }
+        String jsonStr;
+        if (result.containsKey("jrp-client-config")) {
+            jsonStr = result.getString("jrp-client-config");
+        } else {
+            jsonStr = result.toString();
+        }
+        ProxyClientConfig newConfig = Json.decodeValue(jsonStr, ProxyClientConfig.class);
         synchronized (serverLock) {
             HttpServer olderServer = this.server;
             if (olderServer != null) {
