@@ -189,3 +189,4 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 3. 客户端增加配置信息存储到redis功能。
 4. 增加UDP穿透功能。
 5. 代码结构优化。
+6. 完善readme.md文件，增加linux添加服务配置说明。
