@@ -1,0 +1,14 @@
+[Unit]
+Description=JRP Server Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/jrp-server
+ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-server-1.0.2.jar
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -23,9 +23,10 @@
             <includes>
                 <include>**.sh</include>
                 <include>**.bat</include>
+                <include>*.service</include>
             </includes>
         </fileSet>
-
+        A
         <!-- 指定输出target/classes中的配置文件到config目录中 -->
         <fileSet>
             <directory>${basedir}/target/classes</directory>
@@ -43,11 +44,11 @@
         </fileSet>
 
         <!-- 将第三方依赖打包到lib目录中 -->
-<!--        <fileSet>-->
-<!--            <directory>${basedir}/target/lib</directory>-->
-<!--            <outputDirectory>lib</outputDirectory>-->
-<!--            <fileMode>0755</fileMode>-->
-<!--        </fileSet>-->
+        <!--        <fileSet>-->
+        <!--            <directory>${basedir}/target/lib</directory>-->
+        <!--            <outputDirectory>lib</outputDirectory>-->
+        <!--            <fileMode>0755</fileMode>-->
+        <!--        </fileSet>-->
 
         <!-- 将项目启动jar打包到boot目录中 -->
         <fileSet>
