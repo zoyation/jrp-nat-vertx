@@ -122,7 +122,9 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    ```
    方式二：https://gitee.com/mirrors_kohsuke/winsw
 10. 服务端linux开机启动配置：
+
    1.jar包和配置文件放到/home/jrp-server目录下。
+
    2.创建文件 /etc/systemd/system/jrp-server.service，内容如下：
    ```
    [Unit]
@@ -148,6 +150,7 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    ```
    4.验证服务状态：sudo systemctl status jrp-server.service
 11. 客户端linux开机启动配置： 
+
    1.jar包和配置文件放到/home/jrp-client目录下。
 
    2.创建文件 /etc/systemd/system/jrp-client.service，内容如下：
