@@ -26,7 +26,6 @@
                 <include>*.service</include>
             </includes>
         </fileSet>
-        A
         <!-- 指定输出target/classes中的配置文件到config目录中 -->
         <fileSet>
             <directory>${basedir}/target/classes</directory>
