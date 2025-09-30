@@ -21,6 +21,8 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 注册信息管理
@@ -94,10 +96,20 @@ public class RegisterServiceImpl implements IRegisterService, InitializingBean {
                 .setConfig(new JsonObject().put("path", configFilePath));
         ConfigRetrieverOptions options = new ConfigRetrieverOptions().addStore(storeOptions);
         ConfigRetriever retriever = ConfigRetriever.create(vertx, options);
+        CountDownLatch countDownLatch = new CountDownLatch(1);
         retriever.getConfig().onComplete(json -> {
             JsonObject result = json.result();
             registerConfig = Json.decodeValue(result.toString(), RegisterConfig.class);
+            countDownLatch.countDown();
         });
+        try {
+            boolean await = countDownLatch.await(1000, TimeUnit.SECONDS);
+            if(!await){
+                log.error("初始化配置文件超时！");
+            }
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
