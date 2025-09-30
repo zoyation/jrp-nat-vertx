@@ -1,9 +1,7 @@
 package com.tony.jrp.server.model;
 
-import com.tony.jrp.common.model.ClientProxy;
 import lombok.Data;
 
-import java.sql.Timestamp;
 import java.util.List;
 
 /**

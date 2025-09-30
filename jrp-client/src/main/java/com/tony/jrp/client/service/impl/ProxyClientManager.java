@@ -520,10 +520,16 @@ public class ProxyClientManager implements InitializingBean {
         String proxyPass = proxy.getProxy_pass();
         int originPort;
         String originHost;
+        boolean https = false;
         try {
             URL url = new URL(proxyPass);
             originPort = url.getPort();
             originHost = url.getHost();
+            String protocol = url.getProtocol().toLowerCase();
+            https = protocol.equals(ServiceType.HTTPS.name().toLowerCase());
+            if (originPort == -1) {
+                originPort = https ? 443 : 80;
+            }
         } catch (Exception e) {
             String[] ipPort = proxyPass.split(":");
             originHost = ipPort[0];
@@ -537,12 +543,12 @@ public class ProxyClientManager implements InitializingBean {
                 NetSocket netSocket = netSocketMap.get(clientId);
                 if (netSocket != null) {
                     //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                    sendTcpData(data, netSocket);
+                    sendTcpData(originHost, proxyPass, data, netSocket);
                 } else {
                     synchronized (netSocketMap) {
                         netSocket = netSocketMap.get(clientId);
                         if (netSocket != null) {
-                            sendTcpData(data, netSocket);
+                            sendTcpData(originHost, proxyPass, data, netSocket);
                         } else {
                             log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
                             CountDownLatch downLatch = new CountDownLatch(1);
@@ -551,6 +557,7 @@ public class ProxyClientManager implements InitializingBean {
                             clientOptions.setReceiveBufferSize(BUFFER_SIZE);
                             clientOptions.setSendBufferSize(BUFFER_SIZE);
                             NetClient netClient = vertx.createNetClient(clientOptions);
+                            String finalOriginHost = originHost;
                             netClient.connect(socketAddress, asyncResult -> {
                                 try {
                                     if (asyncResult.succeeded()) {
@@ -576,7 +583,7 @@ public class ProxyClientManager implements InitializingBean {
                                         });
                                         //转发返回消息到内网真实服务器
                                         if (data.length() > 0) {
-                                            proxySocket.write(data);
+                                            sendTcpData(finalOriginHost, proxyPass, data, proxySocket);
                                         }
                                         log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
                                     } else {
@@ -658,8 +665,21 @@ public class ProxyClientManager implements InitializingBean {
         }
     }
 
-    private static void sendTcpData(Buffer data, NetSocket netSocket) {
-        netSocket.write(data);
+    /**
+     * 发送TCP数据
+     *
+     * @param originHost 原始服务主机
+     * @param proxyPass  代理服务地址
+     * @param data       数据
+     * @param netSocket  数据发送对象
+     */
+    private static void sendTcpData(String originHost, String proxyPass, Buffer data, NetSocket netSocket) {
+        if (data.toString().contains("Host:")) {
+            //替换Host和Referer值，避免被内网服务器拦截
+            netSocket.write(Buffer.buffer(data.toString().replaceAll("Host: .*", "Host: " + originHost).replaceAll("Referer:.*", "referer: " + proxyPass)));
+        } else {
+            netSocket.write(data);
+        }
         if (netSocket.writeQueueFull()) {
             netSocket.pause();
             netSocket.drainHandler((done) -> netSocket.resume());

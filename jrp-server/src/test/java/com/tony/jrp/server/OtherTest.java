@@ -10,10 +10,11 @@ public class OtherTest {
     public void testBuffer() throws InterruptedException {
         System.out.println(Buffer.buffer("JR得P0").length());
     }
-    private String whiteUrl="^(/apix/)(\\S+)*$";
+
+    private String whiteUrl = "^(/apix/)(\\S+)*$";
 
     @Test
-    public void testUriMatch(){
+    public void testUriMatch() {
         System.out.println(Pattern.compile(whiteUrl).matcher("/api/").matches());
         System.out.println(Pattern.compile(whiteUrl).matcher("/apix/123").matches());
     }

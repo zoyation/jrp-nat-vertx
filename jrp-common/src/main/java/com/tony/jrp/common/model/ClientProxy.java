@@ -1,9 +1,9 @@
 package com.tony.jrp.common.model;
+
 import com.tony.jrp.common.enums.ServiceType;
 import lombok.Data;
 
 import java.io.Serializable;
-import java.util.HashMap;
 
 /**
  * 内网客户端代理信息

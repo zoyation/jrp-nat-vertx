@@ -12,10 +12,8 @@ import io.vertx.core.json.jackson.JacksonCodec;
 import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.system.ApplicationHome;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.stereotype.Service;
 
 import java.io.*;
 import java.util.List;
@@ -44,6 +42,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
             "    }\n" +
             "  ]\n" +
             "}";
+
     public ConfigStoreOptions getConfigStore() {
         return storeOptions;
     }
@@ -80,6 +79,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
 
     /**
      * 保存配置信息
+     *
      * @param list 配置信息列表
      * @return 配置信息
      */
@@ -101,6 +101,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
 
     /**
      * 初始化配置
+     *
      * @throws IOException 异常
      */
     private void initConfig() throws IOException {
@@ -128,6 +129,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
 
     /**
      * 获取配置文件路径
+     *
      * @return 配置文件路径
      * @throws IOException 异常
      */
@@ -149,6 +151,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
 
     /**
      * 获取配置信息
+     *
      * @return 配置信息
      * @throws IOException 异常
      */
@@ -159,6 +162,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
 
     /**
      * 获取配置文件路径
+     *
      * @return 配置文件路径
      * @throws IOException 异常
      */

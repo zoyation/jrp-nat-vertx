@@ -16,7 +16,7 @@ public class RegisterResult {
      */
     private String msg;
 
-    public RegisterResult(){
+    public RegisterResult() {
 
     }
 
@@ -25,18 +25,19 @@ public class RegisterResult {
         this.msg = msg;
     }
 
-    public static RegisterResult result(boolean success,String msg){
-        return new RegisterResult(success,msg);
-    }
-    public static RegisterResult success(){
-        return new RegisterResult(true,null);
+    public static RegisterResult result(boolean success, String msg) {
+        return new RegisterResult(success, msg);
     }
 
-    public static RegisterResult success(String msg){
-        return new RegisterResult(true,msg);
+    public static RegisterResult success() {
+        return new RegisterResult(true, null);
     }
 
-    public static RegisterResult error(String msg){
-        return new RegisterResult(false,msg);
+    public static RegisterResult success(String msg) {
+        return new RegisterResult(true, msg);
+    }
+
+    public static RegisterResult error(String msg) {
+        return new RegisterResult(false, msg);
     }
 }

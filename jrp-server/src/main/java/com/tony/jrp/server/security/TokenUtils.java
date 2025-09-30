@@ -7,8 +7,10 @@ import java.util.Random;
 
 public class TokenUtils {
     public static String runtimeToken = generateToken();
+
     private TokenUtils() {
     }
+
     public static String generateToken() {
         String s = String.valueOf(System.currentTimeMillis() + new Random().nextInt());
 

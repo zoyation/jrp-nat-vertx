@@ -19,10 +19,11 @@ public interface IReverseService {
      * @return 启动结果
      */
     Future<Boolean> startReverseProxy(ClientRegister clientRegister, ServerWebSocket webSocket);
+
     /**
      * 停止代理转发服务
      *
-     * @param clientProxyList   被代理客户端信息
+     * @param clientProxyList 被代理客户端信息
      * @return 停止结果
      */
     Future<String> stopReverseProxy(List<ClientProxy> clientProxyList, ServerWebSocket webSocket);

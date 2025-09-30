@@ -1,6 +1,8 @@
 package com.tony.jrp.common.utils;
+
 import java.io.InputStream;
 import java.util.Scanner;
+
 public class CPUUtils {
     /**
      * 获取当前系统CPU序列，可区分linux系统和windows系统

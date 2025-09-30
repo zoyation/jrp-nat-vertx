@@ -40,11 +40,11 @@ public class RegisterServiceImpl implements IRegisterService, InitializingBean {
 
     @Override
     public void add(RegisterInfo registerInfo) {
-        synchronized (CONFIG_PATH){
+        synchronized (CONFIG_PATH) {
             registerConfig.getReal_list().add(registerInfo);
             registerConfig.getRegister_list().add(registerInfo);
             try {
-                saveToFile(getConfigFilePath(),Json.encode(registerConfig));
+                saveToFile(getConfigFilePath(), Json.encode(registerConfig));
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -53,11 +53,11 @@ public class RegisterServiceImpl implements IRegisterService, InitializingBean {
 
     @Override
     public void update(RegisterInfo registerInfo) {
-        synchronized (CONFIG_PATH){
+        synchronized (CONFIG_PATH) {
             try {
                 List<RegisterInfo> realList = registerConfig.getReal_list();
-                realList.removeIf(r->r.getId().equals(registerInfo.getId()));
-                saveToFile(getConfigFilePath(),Json.encode(registerConfig));
+                realList.removeIf(r -> r.getId().equals(registerInfo.getId()));
+                saveToFile(getConfigFilePath(), Json.encode(registerConfig));
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -104,7 +104,7 @@ public class RegisterServiceImpl implements IRegisterService, InitializingBean {
         });
         try {
             boolean await = countDownLatch.await(1000, TimeUnit.SECONDS);
-            if(!await){
+            if (!await) {
                 log.error("初始化配置文件超时！");
             }
         } catch (InterruptedException e) {

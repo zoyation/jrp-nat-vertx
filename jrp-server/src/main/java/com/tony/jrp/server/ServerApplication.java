@@ -13,6 +13,7 @@ import java.nio.charset.Charset;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
+
 @Slf4j
 @SpringBootApplication
 public class ServerApplication extends AbstractVerticle {
@@ -40,20 +41,20 @@ public class ServerApplication extends AbstractVerticle {
             list.add(mainVerticle);
         } else if (args.length == 1 && (args[0].equals(START) || args[0].equals(RUN))) {
             list.add(mainVerticle);
-        }else if(args.length>1&& list.stream().anyMatch(r->r.startsWith("-Dvertx.id="))){
-            list.add(0,RUN);
-            list.add(1,mainVerticle);
+        } else if (args.length > 1 && list.stream().anyMatch(r -> r.startsWith("-Dvertx.id="))) {
+            list.add(0, RUN);
+            list.add(1, mainVerticle);
         }
         return list;
     }
 
     @Override
-    public void start(Promise<Void> startPromise){
+    public void start(Promise<Void> startPromise) {
         String property = Charset.defaultCharset().displayName();
         log.info("System file.encoding:{}", property);
         System.setProperty("file.encoding", "UTF-8");
         log.info("set file.encoding to UTF-8");
-        vertx.executeBlocking(()->{
+        vertx.executeBlocking(() -> {
             SpringApplication.run(ServerApplication.class, processArgs().toArray(new String[]{}));
             startPromise.complete();
             return true;

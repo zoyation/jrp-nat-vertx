@@ -62,7 +62,7 @@ public class ReverseServiceImpl implements IReverseService {
                 }
             }
             if (!usedPort.isEmpty()) {
-                throw new IllegalArgumentException("端口[" + String.join(",", usedPort) + "]已被使用，请使用"+MIN_PORT+"到"+MAX_PORT+"中其它端口！");
+                throw new IllegalArgumentException("端口[" + String.join(",", usedPort) + "]已被使用，请使用" + MIN_PORT + "到" + MAX_PORT + "中其它端口！");
             } else {
                 CountDownLatch countDownLatch = new CountDownLatch(1);
                 AtomicBoolean result = new AtomicBoolean();
