@@ -556,6 +556,10 @@ public class ProxyClientManager implements InitializingBean {
                             NetClientOptions clientOptions = new NetClientOptions();
                             clientOptions.setReceiveBufferSize(BUFFER_SIZE);
                             clientOptions.setSendBufferSize(BUFFER_SIZE);
+                            if (https) {
+                                clientOptions.setSsl(true);
+                                clientOptions.setTrustAll(true);
+                            }
                             NetClient netClient = vertx.createNetClient(clientOptions);
                             String finalOriginHost = originHost;
                             netClient.connect(socketAddress, asyncResult -> {
