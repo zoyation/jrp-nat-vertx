@@ -23,6 +23,18 @@ public class JRPServerProperties {
      */
     private Integer registerPort = 2000;
     /**
+     * websocket连接是否启用ssl
+     */
+    private boolean ssl = false;
+    /**
+     * 证书文件路径
+     */
+    private String certPath;
+    /**
+     * 密匙文件路径
+     */
+    private String keyPath;
+    /**
      * 配置管理页面用户名
      */
     private String username = "admin";

@@ -6,6 +6,12 @@ vertx:
     page-path: /jrp-server
     #内网服务注册访问地址端口，服务端和客户端转发通信的websocket端口
     register-port: 2000
+    #websocket连接是否启用ssl
+    ssl: false
+    #证书文件路径，如果未配置会使用自动生成的自签名证书文件
+    cert-path:
+    #密钥文件路径，如果未配置会使用自动生成的自签名密匙文件
+    key-path:
     #内网穿透中转服务web管理页面登录用户名
     username: admin
     #内网穿透中转服务web管理页面密码
@@ -17,13 +23,13 @@ vertx:
 # 日志配置
 logging:
   level:
-    root: info
+    root: error
     # web日志
     org.springframework.web: error
     # security 日志
     org.springframework.security: error
     # mybatis日志
-    com.tony.jrp: debug
+    com.tony.jrp: error
   charset:
     # 输出控制台编码
     console: UTF-8

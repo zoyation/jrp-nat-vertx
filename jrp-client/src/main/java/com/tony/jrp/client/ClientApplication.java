@@ -54,6 +54,8 @@ public class ClientApplication extends AbstractVerticle {
         log.info("System file.encoding:{}", property);
         System.setProperty("file.encoding", "UTF-8");
         log.info("set file.encoding to UTF-8");
+        //禁用自带dns
+        System.setProperty("vertx.disableDnsResolver", "true");
         vertx.executeBlocking(() -> {
             SpringApplication.run(ClientApplication.class, processArgs().toArray(new String[]{}));
             startPromise.complete();

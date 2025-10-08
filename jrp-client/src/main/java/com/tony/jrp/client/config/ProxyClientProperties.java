@@ -19,6 +19,10 @@ public class ProxyClientProperties {
      */
     private String registerAddress;
     /**
+     * 穿透中转websocket是否启用ssl
+     */
+    private Boolean ssl = Boolean.FALSE;
+    /**
      * 注册认证信息
      */
     private String token;

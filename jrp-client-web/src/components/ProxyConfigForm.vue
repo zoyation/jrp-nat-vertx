@@ -59,6 +59,7 @@
                                     >
                                         <el-select v-model="row.type" size="large" class="table-select">
                                             <el-option label="HTTP协议" value="HTTP"/>
+                                            <el-option label="HTTPS协议" value="HTTPS"/>
                                             <el-option label="TCP协议" value="TCP"/>
                                             <el-option label="UDP协议" value="UDP"/>
                                         </el-select>
@@ -80,14 +81,14 @@
                             <el-table-column label="穿透外网访问地址">
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
-                                        <a v-if="row.type=='HTTP'"
+                                        <a v-if="row.type=='HTTP'||row.type=='HTTPS'"
                                                 :href="(row.type.toLowerCase()+'://') + configData.remoteHost + ':' + row.remote_port"
                                                 target="_blank"
                                                 style="color: #409eff; text-decoration: underline;"
                                         >
                                             {{row.type.toLowerCase()+'://'}}{{configData.remoteHost+':'+row.remote_port}}
                                         </a>
-                                        <div v-if="row.type!='HTTP'"
+                                        <div v-if="row.type!='HTTP'&&row.type!='HTTPS'"
                                         >
                                             {{configData.remoteHost+':'+row.remote_port}}
                                         </div>

@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class TCPVerticle extends AbstractProxyVerticle {
 
+    public static final String CERTIFICATE_UNKNOWN = "certificate_unknown";
     /**
      * 用户tcp请求客户端socket
      */
@@ -43,6 +44,10 @@ public class TCPVerticle extends AbstractProxyVerticle {
         options.setIdleTimeout(IDLE_TIMEOUT);
         options.setReceiveBufferSize(BUFFER_SIZE);
         options.setSendBufferSize(BUFFER_SIZE);
+        if (clientProxy.getType() == ServiceType.HTTPS) {
+            options.setSsl(true);
+            options.setKeyCertOptions(securityService.getKeyCertOptions());
+        }
         server = this.vertx.createNetServer(options);
         // 处理连接请求
         server.connectHandler(clientSocket -> {
@@ -54,7 +59,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
             String msgId = remotePort.toString().length() + remotePort.toString() + clientAddress.length() + clientAddress;
             //log.info("客户端[{}]连接:{}", clientAddress, remotePort);
             String host = socketAddress.host();
-            boolean httpFlag = clientProxy.getType() == ServiceType.HTTP;
+            boolean httpFlag = clientProxy.getType() == ServiceType.HTTP || clientProxy.getType() == ServiceType.HTTPS;
             //延迟获取是否为http请求，http类型请求创建连接后会马上收到数据，‌SSH协议请求不会收到数据，需要通知被代理客户端连接后返回数据。
             AtomicBoolean receiveDataFlag = new AtomicBoolean(false);
             Handler<Buffer> dataHandler = data -> {
@@ -62,11 +67,11 @@ public class TCPVerticle extends AbstractProxyVerticle {
                 boolean authorized = securityService.authorized(host);
                 //未授权非HTTP请求都屏蔽
                 if (!authorized && !securityService.isHTTPRequest(data)) {
-                    log.warn("关闭非HTTP类型未授权请求[{}]！", clientAddress);
+                    log.warn("关闭非HTTP(S)类型未授权请求[{}]！", clientAddress);
                     clientSocket.close();
                 } else if (authorized) {
                     if (!httpFlag && securityService.isHTTPRequest(data)) {
-                        log.warn("[{}]-[{}]类型服务，授权通过，不支持HTTP访问:{}！", clientAddress, clientProxy.getType().name(), remotePort);
+                        log.warn("[{}]-[{}]类型服务，授权通过，不支持HTTP(S)访问:{}！", clientAddress, clientProxy.getType().name(), remotePort);
                         String warnResponse = securityService.getHttpWarnResponse();
                         clientTcpSocketMap.remove(clientAddress);
                         clientSocket.end(Buffer.buffer(warnResponse));
@@ -89,11 +94,11 @@ public class TCPVerticle extends AbstractProxyVerticle {
                         //尝试HTTP用户名密码信息验证
                         if (securityService.authorizeHttp(clientRegister, host, data)) {
                             if (httpFlag) {
-                                log.debug("HTTP客户端[{}]请求验证通过，开始转发消息!", clientAddress);
+                                log.debug("HTTP(S)客户端[{}]请求验证通过，开始转发消息!", clientAddress);
                                 clientTcpSocketMap.put(clientAddress, clientSocket);
                                 serverSocket.write(Buffer.buffer(msgId).appendBuffer(data));
                             } else {
-                                log.debug("非HTTP客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);
+                                log.debug("非HTTP(S)客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);
                                 clientSocket.end(Buffer.buffer(securityService.getNotHttpSuccessResponse()));
                             }
                         } else if (securityService.canToNetSocket(data.toString())) {
@@ -146,7 +151,14 @@ public class TCPVerticle extends AbstractProxyVerticle {
                     clientSocket.close();
                 }
             });
-        }).exceptionHandler(err -> log.error("端口[{}]TCP内网穿透代理服务异常：{}", remotePort, err.getMessage(), err));
+        }).exceptionHandler(err -> {
+            String message = err.getMessage();
+            if (message.contains(CERTIFICATE_UNKNOWN)) {
+                log.warn("端口[{}]TCP内网穿透代理服务证书不安全：{}", remotePort, message, err);
+            } else {
+                log.error("端口[{}]TCP内网穿透代理服务异常：{}", remotePort, message, err);
+            }
+        });
         server.listen(remotePort, res -> {
             // 监听端口
             if (res.succeeded()) {

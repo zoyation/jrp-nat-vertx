@@ -110,9 +110,11 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     public void init() {
-        String[] registerAddress = properties.getRegisterAddress().split(":");
-        registerPort = registerAddress.length == 2 ? Integer.parseInt(registerAddress[1]) : 80;
-        registerHost = registerAddress[0];
+        String registerAddress = properties.getRegisterAddress();
+        //使用lastIndexOf支持ipv6地址解析。
+        int lastIndex = registerAddress.lastIndexOf(":");
+        registerPort = Integer.parseInt(registerAddress.substring(lastIndex + 1));
+        registerHost = registerAddress.substring(0, lastIndex);
 
         ConfigRetrieverOptions options = new ConfigRetrieverOptions().addStore(configService.getConfigStore());
         ConfigRetriever retriever = ConfigRetriever.create(vertx, options);
@@ -456,13 +458,16 @@ public class ProxyClientManager implements InitializingBean {
 
     }
 
-    private static WebSocketClientOptions getWebSocketClientOptions() {
+    private WebSocketClientOptions getWebSocketClientOptions() {
         WebSocketClientOptions options = new WebSocketClientOptions();
         options.setTcpKeepAlive(true);
         options.setConnectTimeout(CONNECT_TIMEOUT);
         options.setIdleTimeout(IDLE_TIMEOUT);
         options.setMaxMessageSize(BUFFER_SIZE * 2);
         options.setMaxFrameSize(BUFFER_SIZE * 4);
+        options.setSsl(this.properties.getSsl());
+        options.setTrustAll(true);
+        options.setVerifyHost(false);
         return options;
     }
 

@@ -2,12 +2,26 @@
 
 ## 内网穿透工具介绍
 
-基于spring boot、vert.x开发的跨平台的内网穿透工具，服务中转方式实现，支持HTTP（Websocket、SSE）、TCP(
+基于spring boot、vert.x开发的跨平台的内网穿透工具，服务中转方式实现，支持HTTP/HTTPS（Websocket、SSE）、TCP(
 ssh、数据库连接、windows远程)、UDP穿透。
+
+该工具支持功能清单如下：
+1. HTTP、HTTPS、TCP、UDP穿透，**HTTP、HTTPS都可以穿透为HTTPS**。
+2. “HTTP、HTTPS、TCP、UDP”**统一按http/https用户名和密码认证**，服务端设置默认用户名、密码，**客户端可自定义用户名、密码**。
+3. 断线重连功能、开启ssl功能。
+4. 客户端穿透配置热加载，通过web页面修改配置，配置存文件或redis。
+5. 服务端持久化客户端穿透注册信息到磁盘配置文件。
+6. IPV4、IPV6穿透。
+
+不支持代理功能如下：
+1. STCP：安全的TCP内网代理，不需要在服务端暴露端口。
+2. SUDP：安全的UDP内网代理，与STCP类似，不需要在服务端暴露端口。
+3. XTCP：点对点内网穿透代理，与STCP类似，但流量不需要经过服务器中转。
+4. TCPMUX：服务端TCP端口的多路复用，允许通过同一端口访问不同的内网服务。
 
 jrp-nat包括服务端jrp-server和客户端jrp-client。
 
-先在有固定公网IP和开放对应端口的服务器上部署穿透服务端jrp-server，然后在内网部署服务穿透客户端jrp-client，客户端支持通过web配置页面或者配置文件管理配置（配置文件修改后会自动重新注册，不需要重启客户端）。
+先在有固定公网IP和开放端口的服务器上部署穿透服务端jrp-server，然后在内网部署服务穿透客户端jrp-client，客户端支持通过web配置页面或者配置文件管理配置（配置文件修改后会自动重新注册，不需要重启客户端）。
 
 ## 工具特点
 
@@ -30,19 +44,24 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 
 1. 安装jdk8+或jre8+，jre下载地址：https://www.oracle.com/java/technologies/javase/javase8u211-later-archive-downloads.html。
 
-2. 下载已打好的包“jrp-server-1.0.2.tar.gz、jrp-client-1.0.2.tar.gz”，放到对应机器上，并解压，下载地址：https://gitee.com/java-tony/jrp-nat-vertx/releases/tag/v1.0.2。
+2. 下载已打好的包“jrp-server-1.0.3.tar.gz、jrp-client-1.0.3.tar.gz”，放到对应机器上，并解压，下载地址：https://gitee.com/java-tony/jrp-nat-vertx/releases/tag/v1.0.3。
 
 3. 修改配置文件application.yml里vertx.jrp下参数：     
-   a. 内网穿透中转服务jrp-server配置（带独立外网ip和端口的服务器）：
+   a.内网穿透中转服务jrp-server配置（带独立外网ip和端口的服务器）：
    ```
    vertx:
      jrp:
-       #内网服务注册端口
-       register-port: 2000
        #内网穿透中转服务web管理页面端口
        page-port: 10086
        #内网穿透中转服务web管理页面访问路径
        page-path: /jrp-server
+       #内网服务注册访问端口，服务端和客户端转发通信的websocket端口
+       register-port: 2000
+       ssl: false
+       #证书文件路径，如果未配置会使用自动生成的自签名证书文件
+       cert-path:
+       #密钥文件路径，如果未配置会使用自动生成的自签名密匙文件
+       key-path:
        #内网穿透中转服务web管理页面登录用户名、穿透服务http认证访问用户名
        username: admin
        #内网穿透中转服务web管理页面密码、穿透服务http认证访问密码
@@ -52,14 +71,16 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
        #内网穿透服务注册验证信息，客户端需要和服务端一样，不然不能注册。
        token: 2023202
    ```  
-   b. 内网穿透客户端服务jrp-client配置（没有外网ip，能联网访问到带外网ip和端口服务器的局域网机器）:
+   b.内网穿透客户端服务jrp-client配置（没有外网ip，能联网访问到带外网ip和端口服务器的局域网机器）:
     ```
     vertx:
       jrp:
         #配置文件存储方式
         config-store-type: file
-        #内网穿透代理服务注册地址，服务端外网ip和端口(vertx.jrp.register-port)
+        #内网穿透代理注册服务地址，服务端启动时，会自动注册到内网穿透代理服务中，支持ipv6地址(比如:"[2408:8266:e01:7e04:119c:9be2:2bba:4178]:2000")
         register-address: 127.0.0.1:2000
+        #穿透中转websocket是否启用ssl
+        ssl: false
         #内网穿透代理服务注册断线重连次数
         reconnection-times: 600
         #内网穿透验证信息和jrp-server配置值一样，不然不能注册。
@@ -106,10 +127,10 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
       ]
     }
    ```
-6. 启动客户端：通过java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.2.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）。
+6. 启动客户端：通过java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.3.jar启动内网穿透客户端服务（一般是一台能联网的内网服务器）。
 7. 启动成功后，可以通过页面 http://127.0.0.1:8000/jrp-client/web/ 可修改穿透配置，页面如下：
    ![config.png](jrp-doc/images/config.png)
-8. 穿透代理成功后，不管是http、tcp还是udp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息( 默认为admin,10010)，服务端重启后会要求重新输入认证信息。
+8. 穿透代理成功后，不管是http、tcp还是udp代理成功后，得先通过浏览器HTTP方式访问外网ip端口，输入服务端配置的用户名密码认证信息( 默认为admin,10010)或者客户端设置的认证信息（默认为client,10086），服务端重启后会要求重新输入认证信息。
 9. windows开机启动配置：
 
    方式1：打开文件夹“C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp”，start.bat脚本放到里面，示例如下：
@@ -118,43 +139,40 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    chcp 65001
    cd D:\jrp-client
    D:
-   java -server -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.2.jar
+   java -server -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.3.jar
    ```
    方式二：https://gitee.com/mirrors_kohsuke/winsw
 10. 服务端linux开机启动配置：
-
-   1.jar包和配置文件放到/home/jrp-server目录下。
-
-   2.创建文件 /etc/systemd/system/jrp-server.service，内容如下：
-   ```
-   [Unit]
-   Description=JRP Server Service
-   After=network.target
-   
-   [Service]
-   Type=simple
-   User=root
-   WorkingDirectory=/home/jrp-server
-   ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-server-1.0.2.jar
-   Restart=on-failure
-   RestartSec=10
-   
-   [Install]
-   WantedBy=multi-user.target
-   ```
-   3.创建完服务文件后，执行以下命令使服务生效并设置开机启动：
-   ```
-   sudo systemctl daemon-reload
-   sudo systemctl enable jrp-server.service
-   sudo systemctl start jrp-server.service
-   ```
-   4.验证服务状态：sudo systemctl status jrp-server.service
-
+    a.jar包和配置文件放到/home/jrp-server目录下。
+    b.创建文件 /etc/systemd/system/jrp-server.service，内容如下：
+       ```
+       [Unit]
+       Description=JRP Server Service
+       After=network.target
+       
+       [Service]
+       Type=simple
+       User=root
+       WorkingDirectory=/home/jrp-server
+       ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-server-1.0.3.jar
+       Restart=on-failure
+       RestartSec=10
+       
+       [Install]
+       WantedBy=multi-user.target
+       ```
+    c.创建完服务文件后，执行以下命令使服务生效并设置开机启动：
+       ```
+       sudo systemctl daemon-reload
+       sudo systemctl enable jrp-server.service
+       sudo systemctl start jrp-server.service
+       ```
+    d.验证服务状态：sudo systemctl status jrp-server.service
 11. 客户端linux开机启动配置： 
 
-   1.jar包和配置文件放到/home/jrp-client目录下。
+   a.jar包和配置文件放到/home/jrp-client目录下。
 
-   2.创建文件 /etc/systemd/system/jrp-client.service，内容如下：
+   b.创建文件 /etc/systemd/system/jrp-client.service，内容如下：
    ```
    [Unit]
    Description=JRP Client Service
@@ -164,20 +182,20 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
    Type=simple
    User=root
    WorkingDirectory=/home/jrp-client
-   ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.2.jar
+   ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.0.3.jar
    Restart=on-failure
    RestartSec=10
    
    [Install]
    WantedBy=multi-user.target
    ```
-   3.创建完服务文件后，执行以下命令使服务生效并设置开机启动：
+   c.创建完服务文件后，执行以下命令使服务生效并设置开机启动：
    ```
    sudo systemctl daemon-reload
    sudo systemctl enable jrp-client.service
    sudo systemctl start jrp-client.service
    ```
-   4.验证服务状态：sudo systemctl status jrp-client.service
+   d.验证服务状态：sudo systemctl status jrp-client.service
 ## 版本修订记录
 ### 1.0.1版本
 2025-06-10：
@@ -187,10 +205,14 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 2025-07-28：
    1. 修改重连后提示端口占用问题。
    2. 客户端增加web配置界面，和直接改配置文件等效。
-### 1.0.2版本
+### 1.0.3版本
 1. 客户端增加自定义穿透成功后访问认证信息（用户名、密码，可选配置，未配置时统一使用服务端配置的认证信息进行认证）功能。
 2. 服务端添加持久化客户端穿透注册信息到磁盘配置文件功能。
 3. 客户端增加配置信息存储到redis功能。
 4. 增加UDP穿透功能，增加https穿透为http功能。
 5. 代码结构优化。
 6. 完善readme.md文件，增加linux添加服务配置说明。
+### 1.0.3版本
+1. 增加HTTPS或者HTTP服务穿透为自签名HTTPS服务功能。
+2. 增加IPV6支持，客户端application.yml里注册地址可以配置为服务端的IPV6地址。
+3. 客户端和服务端websocket连接增加开启ssl配置功能，需要客户端和服务端的application.yml文件里都配置ssl的值为true。

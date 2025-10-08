@@ -12,6 +12,7 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.*;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.net.PemKeyCertOptions;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.Route;
 import io.vertx.ext.web.Router;
@@ -19,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.sql.Timestamp;
 import java.util.Map;
@@ -221,13 +223,21 @@ public class ProxyServerManager implements InitializingBean {
         vertxHttpServer.listen(this.properties.getRegisterPort());
     }
 
-    private static HttpServerOptions getHttpServerOptions() {
+    private HttpServerOptions getHttpServerOptions() {
         HttpServerOptions serverOptions = new HttpServerOptions();
         serverOptions.setRegisterWebSocketWriteHandlers(true);
         serverOptions.setMaxWebSocketMessageSize(BUFFER_SIZE * 2);
         serverOptions.setMaxWebSocketFrameSize(BUFFER_SIZE * 4);
         serverOptions.setIdleTimeout(IDLE_TIMEOUT);
         serverOptions.setTcpKeepAlive(true);
+        if (this.properties.isSsl()) {
+            serverOptions.setSsl(true);
+            if (StringUtils.hasText(properties.getCertPath()) && StringUtils.hasText(properties.getKeyPath())) {
+                serverOptions.setKeyCertOptions(new PemKeyCertOptions().setCertPath(properties.getCertPath()).setKeyPath(properties.getKeyPath()));
+            } else {
+                serverOptions.setKeyCertOptions(securityService.getKeyCertOptions());
+            }
+        }
         return serverOptions;
     }
 }

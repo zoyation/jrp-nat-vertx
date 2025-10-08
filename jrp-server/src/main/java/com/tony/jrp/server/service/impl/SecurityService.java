@@ -7,6 +7,10 @@ import com.tony.jrp.server.security.TokenUtils;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.net.KeyCertOptions;
+import io.vertx.core.net.PemKeyCertOptions;
+import io.vertx.core.net.SelfSignedCertificate;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,6 +49,12 @@ public class SecurityService implements InitializingBean {
 
     @Autowired
     protected JRPServerProperties properties;
+
+    /**
+     * 签名信息
+     */
+    @Getter
+    private KeyCertOptions keyCertOptions;
 
     /**
      * @param username      用户名
@@ -105,7 +115,7 @@ public class SecurityService implements InitializingBean {
             return false;
         }
         try {
-            boolean authorized = whitePattern.matcher(URLDecoder.decode(uri, UTF_8)).matches();
+            boolean authorized = whitePattern != null && whitePattern.matcher(URLDecoder.decode(uri, UTF_8)).matches();
             if (authorized) {
                 return true;
             }
@@ -313,6 +323,13 @@ public class SecurityService implements InitializingBean {
 
     @Override
     public void afterPropertiesSet() {
-        whitePattern = Pattern.compile(properties.getWhiteUrl());
+        if (StringUtils.hasText(properties.getWhiteUrl())) {
+            whitePattern = Pattern.compile(properties.getWhiteUrl());
+        }
+        if (StringUtils.hasText(properties.getCertPath()) && StringUtils.hasText(properties.getKeyPath())) {
+            keyCertOptions = new PemKeyCertOptions().setCertPath(properties.getCertPath()).setKeyPath(properties.getKeyPath());
+        } else {
+            keyCertOptions = SelfSignedCertificate.create().keyCertOptions();
+        }
     }
 }
