@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Launcher;
 import io.vertx.core.Promise;
+import io.vertx.core.VertxOptions;
 import io.vertx.core.json.jackson.DatabindCodec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
@@ -23,7 +24,14 @@ public class ClientApplication extends AbstractVerticle {
     public static void main(String[] args) {
         List<String> list = getVertxArgs(args, ClientApplication.class.getName());
         DatabindCodec.mapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        new Launcher().dispatch(list.toArray(new String[]{}));
+        new Launcher() {
+            @Override
+            public void beforeStartingVertx(VertxOptions options) {
+                //禁用自带dns
+                options.setAddressResolverOptions(null);
+                super.beforeStartingVertx(options);
+            }
+        }.dispatch(list.toArray(new String[]{}));
     }
 
     /**

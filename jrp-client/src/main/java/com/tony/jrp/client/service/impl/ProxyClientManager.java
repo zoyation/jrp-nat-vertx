@@ -180,7 +180,7 @@ public class ProxyClientManager implements InitializingBean {
         server.requestHandler(router);
         server.listen(port);
         if (log.isInfoEnabled()) {
-            log.info("start server success，可浏览器访问[{http://127.0.0.1:{}{}}]进行穿透配置。", port, webUrl);
+            log.info("start server success，可浏览器访问[http://127.0.0.1:{}{}]进行穿透配置。", port, webUrl);
         }
         return server;
     }

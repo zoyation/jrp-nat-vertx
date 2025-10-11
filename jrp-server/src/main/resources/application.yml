@@ -23,13 +23,13 @@ vertx:
 # 日志配置
 logging:
   level:
-    root: error
+    root: info
     # web日志
     org.springframework.web: error
     # security 日志
     org.springframework.security: error
-    # mybatis日志
-    com.tony.jrp: error
+    # 日志
+    com.tony.jrp: info
   charset:
     # 输出控制台编码
     console: UTF-8

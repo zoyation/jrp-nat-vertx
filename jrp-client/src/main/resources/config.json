@@ -11,9 +11,9 @@
     {
       "id": null,
       "name": "测试2",
-      "proxy_pass": "127.0.0.1:844",
-      "type": "UDP",
-      "remote_port": 1844
+      "proxy_pass": "127.0.0.1:3389",
+      "type": "TCP",
+      "remote_port": 13389
     }
   ]
 }
