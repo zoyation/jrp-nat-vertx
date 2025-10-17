@@ -215,7 +215,7 @@ d. Verify service status: sudo systemctl status jrp-client.service
 1. Fixed port occupation prompt after reconnection.
 2. Added web configuration interface for clients, equivalent to direct configuration file modification.
 
-### 1.0.3
+### 1.0.2
 1. Clients can now customize authentication information (username, password) after successful penetration (optional configuration, if not configured, unified authentication using server-side configuration).
 2. Server adds functionality to persist client penetration registration information to disk configuration files.
 3. Clients can now store configuration information in Redis.
