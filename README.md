@@ -43,9 +43,9 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 
 ## 安装教程
 
-1. 安装jdk8+或jre8+，jre下载地址：https://www.oracle.com/java/technologies/javase/javase8u211-later-archive-downloads.html。
+1. 安装jdk8+或jre8+，jre下载地址：https://www.oracle.com/java/technologies/javase/javase8u211-later-archive-downloads.html 。
 
-2. 下载已打好的包“jrp-server-1.0.3.tar.gz、jrp-client-1.0.3.tar.gz”，放到对应机器上，并解压，下载地址：https://gitee.com/java-tony/jrp-nat-vertx/releases/tag/v1.0.3。
+2. 下载已打好的包“jrp-server-1.0.3.tar.gz、jrp-client-1.0.3.tar.gz”，放到对应机器上，并解压，下载地址：https://gitee.com/java-tony/jrp-nat-vertx/releases/tag/v1.0.3 。
 
 3. 修改配置文件application.yml里vertx.jrp下参数：     
    a.内网穿透中转服务jrp-server配置（带独立外网ip和端口的服务器）：
