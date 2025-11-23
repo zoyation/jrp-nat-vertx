@@ -217,3 +217,13 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 1. 增加HTTPS或者HTTP服务穿透为自签名HTTPS服务功能。
 2. 增加IPV6支持，客户端application.yml里注册地址可以配置为服务端的IPV6地址。
 3. 客户端和服务端websocket连接增加开启ssl配置功能，需要客户端和服务端的application.yml文件里都配置ssl的值为true。
+### 1.1.0 版本
+1. 认证加固：安全考虑，去掉HTTP类认证通过后基于IP的简单认证，认证通过去掉返回认证类型提示，只返回200状态码；验证增加时间限制控制，时间限制参数可在配置文件配置。
+2. HTTP(S)代理穿透：增加HTTP正向代理、HTTPS正向代理转发功能，结合window等代理配置正向代理方式（输入内网服务地址和端口号）穿透访问内网。
+3. SOCKS代理穿透：增加SOCK4正向代理、SOCK5正向代理转发功能，结合window等代理配置正向代理方式（输入内网服务地址和端口号）穿透访问内网。
+4. 穿透端口自动分配：客户端不指定穿透端口时，动态分配一个可用端口并返回给客户端。
+5. 开机自启动：在安装了jdk或jre基础上，在linux和window环境下通过脚本或者程序一键设置开机自启。
+## 联系我
+如需了解更多，请关注微信公众号java-tony：
+![java-tony](jrp-doc/images/java-tony.png)
+https://mp.weixin.qq.com/mp/appmsgalbum?__biz=MzI5MTIyODk3NQ==&action=getalbum&album_id=4202910982592675855#wechat_redirect

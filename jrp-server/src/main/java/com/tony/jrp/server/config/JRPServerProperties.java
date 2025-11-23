@@ -51,6 +51,10 @@ public class JRPServerProperties {
      */
     private String whiteUrl;
     /**
+     * host认证有效期，单位秒，默认1天
+     */
+    private Long hostAuthExpire = 86400L;
+    /**
      * 访问认证类型：SHA256，MD5
      */
     private String algorithm = "MD5";

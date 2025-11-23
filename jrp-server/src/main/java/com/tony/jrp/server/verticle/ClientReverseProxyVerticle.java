@@ -43,6 +43,13 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
      */
     private final Map<Integer, AbstractProxyVerticle> proxyVerticleMap = new ConcurrentHashMap<>();
 
+    /**
+     * 构造函数
+     *
+     * @param clientRegister  客户端注册信息
+     * @param serverSocket    服务器socket
+     * @param securityService 安全认证服务
+     */
     public ClientReverseProxyVerticle(ClientRegister clientRegister, ServerWebSocket serverSocket, SecurityService securityService) {
         this.clientRegister = clientRegister;
         this.serverSocket = serverSocket;

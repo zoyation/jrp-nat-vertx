@@ -49,6 +49,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
             options.setKeyCertOptions(securityService.getKeyCertOptions());
         }
         server = this.vertx.createNetServer(options);
+        boolean httpFlag = clientProxy.getType() == ServiceType.HTTP || clientProxy.getType() == ServiceType.HTTPS;
         // 处理连接请求
         server.connectHandler(clientSocket -> {
             clientSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
@@ -59,12 +60,12 @@ public class TCPVerticle extends AbstractProxyVerticle {
             String msgId = remotePort.toString().length() + remotePort.toString() + clientAddress.length() + clientAddress;
             //log.info("客户端[{}]连接:{}", clientAddress, remotePort);
             String host = socketAddress.host();
-            boolean httpFlag = clientProxy.getType() == ServiceType.HTTP || clientProxy.getType() == ServiceType.HTTPS;
             //延迟获取是否为http请求，http类型请求创建连接后会马上收到数据，‌SSH协议请求不会收到数据，需要通知被代理客户端连接后返回数据。
             AtomicBoolean receiveDataFlag = new AtomicBoolean(false);
             Handler<Buffer> dataHandler = data -> {
                 receiveDataFlag.set(true);
-                boolean authorized = securityService.authorized(host);
+                //authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
+                boolean authorized = (!httpFlag && securityService.authorized(host)) || clientTcpSocketMap.containsKey(clientAddress);
                 //未授权非HTTP请求都屏蔽
                 if (!authorized && !securityService.isHTTPRequest(data)) {
                     log.warn("关闭非HTTP(S)类型未授权请求[{}]！", clientAddress);
@@ -72,9 +73,9 @@ public class TCPVerticle extends AbstractProxyVerticle {
                 } else if (authorized) {
                     if (!httpFlag && securityService.isHTTPRequest(data)) {
                         log.warn("[{}]-[{}]类型服务，授权通过，不支持HTTP(S)访问:{}！", clientAddress, clientProxy.getType().name(), remotePort);
-                        String warnResponse = securityService.getHttpWarnResponse();
+                        //String warnResponse = securityService.getHttpWarnResponse();
                         clientTcpSocketMap.remove(clientAddress);
-                        clientSocket.end(Buffer.buffer(warnResponse));
+                        clientSocket.end(Buffer.buffer(securityService.getOKResponse()));
                     } else {
                         log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
                         clientTcpSocketMap.put(clientAddress, clientSocket);
@@ -99,7 +100,8 @@ public class TCPVerticle extends AbstractProxyVerticle {
                                 serverSocket.write(Buffer.buffer(msgId).appendBuffer(data));
                             } else {
                                 log.debug("非HTTP(S)客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);
-                                clientSocket.end(Buffer.buffer(securityService.getNotHttpSuccessResponse()));
+                                //String notHttpSuccessResponse = securityService.getNotHttpSuccessResponse();
+                                clientSocket.end(Buffer.buffer(securityService.getOKResponse()));
                             }
                         } else if (securityService.canToNetSocket(data.toString())) {
                             log.warn("[{}]websocket或CONNECT未授权访问:{}，直接关闭！", clientAddress, remotePort);

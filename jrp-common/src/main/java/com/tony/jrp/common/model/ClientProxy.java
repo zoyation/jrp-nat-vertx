@@ -23,11 +23,13 @@ public class ClientProxy implements Serializable {
      */
     private String proxy_pass;
     /**
-     * 穿透类型
+     * 穿透类型 默认HTTP
      */
-    private ServiceType type;
+    private ServiceType type = ServiceType.HTTP;
     /**
      * 穿透外网访问端口
      */
     private Integer remote_port;
+
+
 }

@@ -2,9 +2,12 @@ package com.tony.jrp.client.service.impl;
 
 import com.tony.jrp.client.config.ProxyClientConfig;
 import com.tony.jrp.client.config.ProxyClientProperties;
+import com.tony.jrp.client.handler.AbstractProxyHandler;
+import com.tony.jrp.client.handler.HttpForwardProxyHandler;
+import com.tony.jrp.client.handler.TcpReverseProxyHandler;
+import com.tony.jrp.client.handler.UdpReverseProxyHandler;
 import com.tony.jrp.client.service.IConfigService;
 import com.tony.jrp.common.enums.JRPMsgType;
-import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
@@ -15,15 +18,9 @@ import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.datagram.DatagramSocket;
-import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.*;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
-import io.vertx.core.net.NetClient;
-import io.vertx.core.net.NetClientOptions;
-import io.vertx.core.net.NetSocket;
-import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.StaticHandler;
 import lombok.Data;
@@ -32,8 +29,7 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -73,15 +69,22 @@ public class ProxyClientManager implements InitializingBean {
     private volatile WebSocket registerWebSocket = null;
     private Long pingTimerId = null;
     private String errorMessage = "";
-    private final Map<String, NetSocket> netSocketMap = new ConcurrentHashMap<>();
+    //private final Map<String, NetSocket> netSocketMap = new ConcurrentHashMap<>();
+
+    //private final Map<String, DatagramSocket> datagramSocketMap = new ConcurrentHashMap<>();
     /**
-     * udp缓存
+     * TCP代理处理器
      */
-    private final Map<String, DatagramSocket> datagramSocketMap = new ConcurrentHashMap<>();
+    private AbstractProxyHandler tcpProxyHandler;
     /**
-     * udp最新读或者写时间缓存
+     * UDP代理处理器
      */
-    private final Map<String, Long> udpReadOrWriteTimeMap = new ConcurrentHashMap<>();
+    private AbstractProxyHandler udpProxyHandler;
+
+    /**
+     * http正向代理穿透处理器
+     */
+    private AbstractProxyHandler httpForwardHandler;
 
     @Data
     private static class RegisterStatus {
@@ -105,11 +108,12 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     @Override
-    public void afterPropertiesSet() {
+    public void afterPropertiesSet() throws IOException {
         init();
     }
 
-    public void init() {
+    public void init() throws IOException {
+        this.closeAndCreateProxyHandler();
         String registerAddress = properties.getRegisterAddress();
         //使用lastIndexOf支持ipv6地址解析。
         int lastIndex = registerAddress.lastIndexOf(":");
@@ -133,20 +137,21 @@ public class ProxyClientManager implements InitializingBean {
             restartServer(newConfig);
             //eventBus.publish(CONFIG_CHANGE, json);
         });
-        vertx.setPeriodic(1000, (id) -> {
-            //1秒能没有操作的进行清理
-            udpReadOrWriteTimeMap.entrySet().removeIf(entry -> {
-                String clientAddress = entry.getKey();
-                boolean timeout = entry.getValue() + 1000L < System.currentTimeMillis();
-                if (timeout) {
-                    DatagramSocket remove = datagramSocketMap.remove(clientAddress);
-                    if (remove != null) {
-                        remove.close();
-                    }
-                }
-                return timeout;
-            });
-        });
+    }
+
+    /**
+     * 创建代理处理器
+     */
+    private void closeAndCreateProxyHandler() throws IOException {
+        log.info("停止TCP穿透转发服务");
+        tcpProxyHandler.close();
+        log.info("停止UDP穿透转发服务");
+        udpProxyHandler.close();
+        log.info("停止http正向代理穿透转发服务");
+        httpForwardHandler.close();
+        tcpProxyHandler = new TcpReverseProxyHandler(vertx);
+        udpProxyHandler = new UdpReverseProxyHandler(vertx);
+        httpForwardHandler = new HttpForwardProxyHandler(vertx);
     }
 
     private HttpServer startServer(ProxyClientConfig newConfig) {
@@ -290,58 +295,13 @@ public class ProxyClientManager implements InitializingBean {
                             });
                             webSocket.handler(buffer -> {
                                 //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为{
-                                String prefix = buffer.getString(0, 1);
-                                JRPMsgType headMsgType = prefix.equals("{") ? JRPMsgType.REGISTER_RESULT : JRPMsgType.GET;
-                                switch (headMsgType) {
-                                    case GET:
-                                        //代理端口长度1位
-                                        int portLen = Integer.parseInt(prefix);
-                                        //代理端口
-                                        String remotePort = buffer.getString(1, 1 + portLen);
-                                        //请求唯一标识长度
-                                        int clientLen = Integer.parseInt(buffer.getString(1 + portLen, 1 + portLen + 2));
-                                        //请求唯一标识（IP+端口）
-                                        String clientId = buffer.getString(1 + portLen + 2, 1 + portLen + 2 + clientLen);
-                                        //代理端口长度1位+代理端口+请求唯一标识长度+请求唯一标识（IP+端口）
-                                        String msgId = portLen + remotePort + clientLen + clientId;
-                                        //收到外网穿透服务器发送的客户端请求通知
-                                        Buffer data = buffer.getBuffer(1 + portLen + 2 + clientLen, buffer.length());
-                                        log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", clientId);
-                                        try {
-                                            if (data.toString().equals(JRPMsgType.CLOSE.getCode())) {
-                                                NetSocket netSocket = netSocketMap.get(clientId);
-                                                DatagramSocket datagramSocket = datagramSocketMap.get(clientId);
-                                                if (netSocket != null || datagramSocket != null) {
-                                                    if (netSocket != null) {
-                                                        log.debug("收到断开连接请求，关闭TCP连接[{}]。", clientId);
-                                                        netSocketMap.remove(clientId);
-                                                        netSocket.close();
-                                                    }
-                                                    if (datagramSocket != null) {
-                                                        log.debug("收到断开连接请求，关闭UDP连接[{}]。", clientId);
-                                                        datagramSocketMap.remove(clientId);
-                                                        udpReadOrWriteTimeMap.remove(clientId);
-                                                        datagramSocket.close();
-                                                    }
-                                                } else {
-                                                    log.warn("收到断开连接请求，未找到连接[{}]对应netSocket。", clientId);
-                                                }
-                                            } else {
-                                                ClientProxy proxy = remotePortClientMap.get(remotePort);
-                                                vertx.executeBlocking(() -> {
-                                                    try {
-                                                        receiveMsgAndProxy(msgId, clientId, proxy, data);
-                                                        return true;
-                                                    } catch (MalformedURLException e) {
-                                                        log.error("接受消息失败：{}", e.getMessage(), e);
-                                                        return false;
-                                                    }
-                                                });
-                                            }
-                                        } catch (Exception e) {
-                                            log.error("接受消息失败：{}", e.getMessage(), e);
-                                        }
-                                        break;
+                                byte msgType = buffer.getByte(0);
+                                JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
+                                if (jrpMsgType == null) {
+                                    log.error("未知消息类型：{}", buffer);
+                                    return;
+                                }
+                                switch (jrpMsgType) {
                                     case REGISTER_RESULT:
                                         try {
                                             RegisterResult registerResult = Json.decodeValue(buffer, RegisterResult.class);
@@ -349,29 +309,46 @@ public class ProxyClientManager implements InitializingBean {
                                                 result.set(true);
                                                 log.info("注册成功：\r\n{}", new JsonObject(buffer).encodePrettily());
                                                 for (ClientProxy proxy : register.getProxies()) {
-                                                    //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
-                                                    String message = "HTTP服务[{}]代理后外网地址：[http://{}:{}]！";
-                                                    switch (proxy.getType()) {
-                                                        case HTTP:
-                                                            message = "HTTP服务[{}]代理后外网地址：[http://{}:{}]！";
-                                                            break;
-                                                        case HTTPS:
-                                                            message = "HTTPS服务[{}]代理后外网地址：[https://{}:{}]！";
-                                                            break;
-                                                        case TCP:
-                                                            message = "TCP服务[{}]代理后外网地址：[{}:{}]！";
-                                                            break;
-                                                        case UDP:
-                                                            message = "UDP服务[{}]代理后外网地址：[{}:{}]！";
-                                                            break;
-                                                        case SOCKS4:
-                                                            message = "SOCKS4服务[{}]代理后外网地址：[{}:{}]！";
-                                                            break;
-                                                        case SOCKS5:
-                                                            message = "SOCKS5服务[{}]代理后外网地址：[{}:{}]！";
-                                                            break;
+                                                    if (proxy.getType() != null) {
+                                                        //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
+                                                        String message;
+                                                        String logMessage = "";
+                                                        switch (proxy.getType()) {
+                                                            case HTTP:
+                                                                message = "HTTP服务[%]穿透后外网地址：[http://%:%]！";
+                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                                break;
+                                                            case HTTPS:
+                                                                message = "HTTPS服务[{}]穿透后外网地址：[https://{}:{}]！";
+                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                                break;
+                                                            case TCP:
+                                                                message = "TCP服务[{}]穿透后外网地址：[{}:{}]！";
+                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                                break;
+                                                            case UDP:
+                                                                message = "UDP服务[{}]穿透后外网地址：[{}:{}]！";
+                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                                break;
+                                                            case HTTP_PROXY:
+                                                                message = "HTTP代理服务穿透后外网地址：[http://{}:{}]！";
+                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                                break;
+                                                            case HTTPS_PROXY:
+                                                                message = "HTTPS代理服务穿透后外网地址：[https://{}:{}]！";
+                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                                break;
+                                                            case SOCKS4:
+                                                                message = "SOCKS4代理服务穿透后外网地址：[{}:{}]！";
+                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                                break;
+                                                            case SOCKS5:
+                                                                message = "SOCKS5代理服务穿透后外网地址：[{}:{}]！";
+                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                                break;
+                                                        }
+                                                        log.info(logMessage);
                                                     }
-                                                    log.info(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                 }
                                                 clientProxyList = register.getProxies();
                                                 registerWebSocket = webSocket;
@@ -401,6 +378,34 @@ public class ProxyClientManager implements InitializingBean {
                                             registerCountDown.countDown();
                                         }
                                         break;
+                                    case CLOSE:
+                                    case RECEIVE:
+                                        //获取消息类型后面的buffer
+                                        buffer = buffer.getBuffer(1, buffer.length());
+                                        //代理端口长度1位
+                                        int portLen = Integer.parseInt(buffer.getString(0, 1));
+                                        //代理端口
+                                        String remotePort = buffer.getString(1, 1 + portLen);
+                                        //请求唯一标识长度
+                                        int clientLen = Integer.parseInt(buffer.getString(1 + portLen, 1 + portLen + 2));
+                                        //请求唯一标识（IP+端口）
+                                        String clientId = buffer.getString(1 + portLen + 2, 1 + portLen + 2 + clientLen);
+                                        //代理端口长度1位+代理端口+请求唯一标识长度+请求唯一标识（IP+端口）
+                                        String msgId = portLen + remotePort + clientLen + clientId;
+                                        //收到外网穿透服务器发送的客户端请求通知
+                                        Buffer data = buffer.getBuffer(1 + portLen + 2 + clientLen, buffer.length());
+                                        log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", clientId);
+                                        ClientProxy proxy = remotePortClientMap.get(remotePort);
+                                        switch (proxy.getType()) {
+                                            case HTTP:
+                                            case HTTPS:
+                                            case TCP:
+                                                tcpProxyHandler.handle(webSocket, msgType, msgId, clientId, proxy.getProxy_pass(), data);
+                                                break;
+                                            case UDP:
+                                                udpProxyHandler.handle(webSocket, msgType, msgId, clientId, proxy.getProxy_pass(), data);
+                                                break;
+                                        }
                                 }
                             });
                             webSocket.closeHandler(closeHandler -> {
@@ -485,16 +490,17 @@ public class ProxyClientManager implements InitializingBean {
                 vertx.cancelTimer(pingTimerId);
                 pingTimerId = null;
             }
-            if (!netSocketMap.isEmpty()) {
-                log.info("停止TCP转发服务");
-                netSocketMap.values().forEach(NetSocket::close);
-                netSocketMap.clear();
-            }
-            if (!datagramSocketMap.isEmpty()) {
-                log.info("停止UDP转发服务");
-                datagramSocketMap.values().forEach(DatagramSocket::close);
-                udpReadOrWriteTimeMap.clear();
-            }
+            this.closeAndCreateProxyHandler();
+//            if (!netSocketMap.isEmpty()) {
+//                log.info("停止TCP转发服务");
+//                netSocketMap.values().forEach(NetSocket::close);
+//                netSocketMap.clear();
+//            }
+//            if (!datagramSocketMap.isEmpty()) {
+//                log.info("停止UDP转发服务");
+//                datagramSocketMap.values().forEach(DatagramSocket::close);
+//                udpReadOrWriteTimeMap.clear();
+//            }
             if (registerWebSocket != null && !registerWebSocket.isClosed() && close) {
                 log.info("关闭registerWebSocket");
                 registerWebSocket.close();
@@ -503,221 +509,12 @@ public class ProxyClientManager implements InitializingBean {
             log.error("closeWebSocket error：{}", e.getMessage(), e);
         } finally {
             registerWebSocket = null;
-            netSocketMap.clear();
-            datagramSocketMap.clear();
-            udpReadOrWriteTimeMap.clear();
+//            netSocketMap.clear();
+//            datagramSocketMap.clear();
+//            udpReadOrWriteTimeMap.clear();
             promise.complete();
         }
         return promise.future();
-    }
-
-    /**
-     * 接受消息，发请求到内网服务并返回结果
-     *
-     * @param msgId    消息id
-     * @param clientId 请求唯一标识（IP+端口）
-     * @param proxy    代理配置信息
-     * @param data     数据
-     * @throws MalformedURLException url异常
-     */
-    private void receiveMsgAndProxy(String msgId, String clientId, ClientProxy proxy, Buffer data) throws MalformedURLException {
-        ServiceType type = proxy.getType();
-        String proxyPass = proxy.getProxy_pass();
-        int originPort;
-        String originHost;
-        boolean https = false;
-        try {
-            URL url = new URL(proxyPass);
-            originPort = url.getPort();
-            originHost = url.getHost();
-            String protocol = url.getProtocol().toLowerCase();
-            https = protocol.equals(ServiceType.HTTPS.name().toLowerCase());
-            if (originPort == -1) {
-                originPort = https ? 443 : 80;
-            }
-        } catch (Exception e) {
-            String[] ipPort = proxyPass.split(":");
-            originHost = ipPort[0];
-            originPort = Integer.parseInt(ipPort[1]);
-        }
-        switch (type) {
-            case HTTP:
-            case HTTPS:
-            case TCP: {
-                final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
-                NetSocket netSocket = netSocketMap.get(clientId);
-                if (netSocket != null) {
-                    //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                    sendTcpData(originHost, proxyPass, data, netSocket);
-                } else {
-                    synchronized (netSocketMap) {
-                        netSocket = netSocketMap.get(clientId);
-                        if (netSocket != null) {
-                            sendTcpData(originHost, proxyPass, data, netSocket);
-                        } else {
-                            log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
-                            CountDownLatch downLatch = new CountDownLatch(1);
-                            // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
-                            NetClientOptions clientOptions = new NetClientOptions();
-                            clientOptions.setReceiveBufferSize(BUFFER_SIZE);
-                            clientOptions.setSendBufferSize(BUFFER_SIZE);
-                            if (https) {
-                                clientOptions.setSsl(true);
-                                clientOptions.setTrustAll(true);
-                            }
-                            NetClient netClient = vertx.createNetClient(clientOptions);
-                            String finalOriginHost = originHost;
-                            netClient.connect(socketAddress, asyncResult -> {
-                                try {
-                                    if (asyncResult.succeeded()) {
-                                        NetSocket proxySocket = asyncResult.result();
-                                        proxySocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
-                                        netSocketMap.put(clientId, proxySocket);
-                                        proxySocket.exceptionHandler(e -> log.debug("代理转发服务异常：{}", e.getMessage(), e));
-                                        proxySocket.closeHandler(ch -> {
-                                            if (registerWebSocket != null && netSocketMap.remove(clientId) != null) {
-                                                log.debug("客户端[{}]对应的内容请求关闭！", clientId);
-                                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
-                                            }
-                                        });
-                                        proxySocket.handler(response -> {
-                                            if (registerWebSocket != null && netSocketMap.get(clientId) != null) {
-                                                log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
-                                                //消息标志符+客户端远程ID(ip+端口)长度2位+远程ID
-                                                //Integer remotePort = proxy.getRemote_port();
-                                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(response));
-                                            } else {
-                                                log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
-                                            }
-                                        });
-                                        //转发返回消息到内网真实服务器
-                                        if (data.length() > 0) {
-                                            sendTcpData(finalOriginHost, proxyPass, data, proxySocket);
-                                        }
-                                        log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
-                                    } else {
-                                        log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());
-                                    }
-                                } catch (Exception e) {
-                                    log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                                    registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
-                                } finally {
-                                    downLatch.countDown();
-                                }
-                            });
-                            try {
-                                downLatch.await();
-                            } catch (InterruptedException e) {
-                                log.error("转发服务连接处理异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendString(JRPMsgType.CLOSE.getCode()));
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-            case UDP: {
-                final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
-                DatagramSocket netSocket = datagramSocketMap.get(clientId);
-                if (netSocket != null) {
-                    //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                    sendUdpData(clientId, data, netSocket, originPort, originHost);
-                } else {
-                    synchronized (datagramSocketMap) {
-                        netSocket = datagramSocketMap.get(clientId);
-                        if (netSocket != null) {
-                            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                            sendUdpData(clientId, data, netSocket, originPort, originHost);
-                        } else {
-                            log.info("收到UPD数据[{}]，准备发送到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
-                            CountDownLatch downLatch = new CountDownLatch(1);
-                            // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
-                            DatagramSocketOptions clientOptions = new DatagramSocketOptions();
-                            clientOptions.setReceiveBufferSize(BUFFER_SIZE);
-                            clientOptions.setSendBufferSize(BUFFER_SIZE);
-                            clientOptions.setReusePort(true);
-                            DatagramSocket netClient = vertx.createDatagramSocket(clientOptions);
-                            netClient.exceptionHandler(e -> {
-                                log.error("转发udp消息异常：{}", e.getMessage(), e);
-                                DatagramSocket remove = datagramSocketMap.remove(clientId);
-                                if (remove != null) {
-                                    remove.close();
-                                }
-                                udpReadOrWriteTimeMap.remove(clientId);
-                            });
-                            netClient.handler(socket -> {
-                                log.debug("udp原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
-                                registerWebSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(socket.data()));
-                            });
-                            netClient.send(data, originPort, originHost, rs -> {
-                                if (rs.succeeded()) {
-                                    datagramSocketMap.put(clientId, netClient);
-                                    udpReadOrWriteTimeMap.put(clientId, System.currentTimeMillis());
-                                } else {
-                                    Throwable e = rs.cause();
-                                    log.error("转发udp消息到原始服务异常：{}，数据：{}", e.getMessage(), data.toString(), e);
-                                }
-                                downLatch.countDown();
-                            });
-                            try {
-                                downLatch.await(1, TimeUnit.SECONDS);
-                            } catch (InterruptedException e) {
-                                log.error("udp转发服务连接处理异常：{}，删除缓存", e.getMessage(), e);
-                                datagramSocketMap.remove(clientId);
-                                udpReadOrWriteTimeMap.remove(clientId);
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-        }
-    }
-
-    /**
-     * 发送TCP数据
-     *
-     * @param originHost 原始服务主机
-     * @param proxyPass  代理服务地址
-     * @param data       数据
-     * @param netSocket  数据发送对象
-     */
-    private static void sendTcpData(String originHost, String proxyPass, Buffer data, NetSocket netSocket) {
-        if (data.toString().contains("Host:")) {
-            //替换Host和Referer值，避免被内网服务器拦截
-            netSocket.write(Buffer.buffer(data.toString().replaceAll("Host: .*", "Host: " + originHost).replaceAll("Referer:.*", "referer: " + proxyPass)));
-        } else {
-            netSocket.write(data);
-        }
-        if (netSocket.writeQueueFull()) {
-            netSocket.pause();
-            netSocket.drainHandler((done) -> netSocket.resume());
-        }
-    }
-
-    /**
-     * 发送UDP数据
-     *
-     * @param clientId   客户端ID
-     * @param data       数据
-     * @param netSocket  数据发送对象
-     * @param originPort 原始服务端口
-     * @param originHost 原始服务主机
-     */
-    private void sendUdpData(String clientId, Buffer data, DatagramSocket netSocket, int originPort, String originHost) {
-        netSocket.send(data, originPort, originHost, rs -> {
-            if (rs.failed()) {
-                Throwable e = rs.cause();
-                log.error("转发udp消息到原始服务异常：{}", e.getMessage(), e);
-                DatagramSocket remove = datagramSocketMap.remove(clientId);
-                if (remove != null) {
-                    remove.close();
-                }
-                udpReadOrWriteTimeMap.remove(clientId);
-            } else {
-                udpReadOrWriteTimeMap.put(clientId, System.currentTimeMillis());
-            }
-        });
     }
 }
 

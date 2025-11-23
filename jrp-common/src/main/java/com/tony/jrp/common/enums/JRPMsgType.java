@@ -10,20 +10,20 @@ import java.util.Arrays;
  */
 @Getter
 public enum JRPMsgType implements Serializable {
-    REGISTER("JRP0"),
-    REGISTER_RESULT("JRP1"),
-    GET("JRP2"),
-    RESPONSE("JRP3"),
-    CLOSE("JRP4"),
-    WEBSOCKET_GET("JRP5");
-    private final String code;
-    public static final int TYPE_LEN = 4;
+    REGISTER((byte) 0X00),
+    REGISTER_RESULT((byte) 0X01),
+    RECEIVE((byte) 0X02),
+    RESPONSE((byte) 0X03),
+    CLOSE((byte) 0X04),
+    WEBSOCKET_GET((byte) 0X05);
+    private final byte code;
+    public static final int TYPE_LEN = 1;
 
-    JRPMsgType(String code) {
+    JRPMsgType(byte code) {
         this.code = code;
     }
 
-    public static JRPMsgType getByCode(String code) {
-        return Arrays.stream(JRPMsgType.values()).filter(r -> r.code.equals(code)).findFirst().orElse(null);
+    public static JRPMsgType getByCode(byte code) {
+        return Arrays.stream(JRPMsgType.values()).filter(r -> r.code == code).findFirst().orElse(null);
     }
 }

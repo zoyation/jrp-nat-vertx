@@ -1,5 +1,6 @@
 package com.tony.jrp.server.service.impl;
 
+import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
 import com.tony.jrp.server.config.JRPServerProperties;
@@ -58,6 +59,9 @@ public class ProxyServerManager implements InitializingBean {
      */
     @Autowired
     protected IReverseService reverseService;
+    /**
+     * 注册信息管理
+     */
     @Autowired
     protected IRegisterService registerService;
 
@@ -166,7 +170,7 @@ public class ProxyServerManager implements InitializingBean {
                                     serverWebSocket.close();
                                 });
                                 log.info("来自[{}]的服务注册成功,textHandlerID[{}]:\r\n{}", remoteAddress, textHandlerID, prettily);
-                                serverWebSocket.write(Buffer.buffer(Json.encode(RegisterResult.success("注册成功！"))));
+                                serverWebSocket.write(Buffer.buffer(new byte[]{JRPMsgType.REGISTER_RESULT.getCode()}).appendBuffer(Buffer.buffer(Json.encode(RegisterResult.success("注册成功！")))));
                                 RegisterInfo registerInfo = new RegisterInfo();
                                 registerInfo.setId(textHandlerID);
                                 registerInfo.setHost(remoteAddress.host());

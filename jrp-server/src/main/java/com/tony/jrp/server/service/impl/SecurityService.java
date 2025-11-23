@@ -19,7 +19,13 @@ import org.springframework.util.StringUtils;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
-import java.util.*;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -34,9 +40,9 @@ public class SecurityService implements InitializingBean {
     public static final String AUTHORIZATION = "Authorization";
     private Pattern whitePattern;
     /**
-     * 已授权主机列表
+     * 已授权主机列表和授权过期时间
      */
-    private final Set<String> authorizedHostSet = Collections.synchronizedSet(new HashSet<>());
+    private final Map<String, Long> authorizedHostSet = new ConcurrentHashMap<>();
     /**
      * 所有HTTP方法
      */
@@ -66,11 +72,11 @@ public class SecurityService implements InitializingBean {
      */
     public boolean authorize(String username, String password, String method, String host, String authorization) {
         boolean authorized = false;
-        if (authorizedHostSet.contains(host)) {
+        if (authorizedHostSet.containsKey(host)) {
             authorized = true;
         } else {
             if (authorization != null && (this.checkHeaderAuth(username, password, method, host, authorization))) {
-                authorizedHostSet.add(host);
+                authorizedHostSet.put(host, properties.getHostAuthExpire() * 1000 + System.currentTimeMillis());
                 authorized = true;
             }
         }
@@ -153,7 +159,7 @@ public class SecurityService implements InitializingBean {
      * @return 判断ip/主机是否授权过
      */
     public boolean authorized(String host) {
-        return authorizedHostSet.contains(host);
+        return authorizedHostSet.containsKey(host);
     }
 
     /**
@@ -292,6 +298,16 @@ public class SecurityService implements InitializingBean {
                 "<h1>HTTP NOT SUPPORT!</h1>\r\n";
     }
 
+    public String getOKResponse() {
+        return "HTTP/1.1 " + HttpResponseStatus.OK + "\r\n" +  //响应头第一行
+                "Content-Type: text/html; charset=utf-8\r\n" +  //简单放一个头部信息
+                "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
+                "Pragma: no-cache\r\n" +
+                "Expires: 0\r\n" +
+                "\r\n" +  //这个空行是来分隔请求头与请求体的
+                "<h1>OK</h1>\r\n";
+    }
+
     public String getNotHttpSuccessResponse() {
         return "HTTP/1.1 " + HttpResponseStatus.FORBIDDEN + "\r\n" +  //响应头第一行
                 "Content-Type: text/html; charset=utf-8\r\n" +  //简单放一个头部信息
@@ -331,5 +347,9 @@ public class SecurityService implements InitializingBean {
         } else {
             keyCertOptions = SelfSignedCertificate.create().keyCertOptions();
         }
+        //10秒清理一次过期host
+        Executors.newScheduledThreadPool(1).scheduleAtFixedRate(() -> {
+            authorizedHostSet.entrySet().removeIf(r -> r.getValue() < System.currentTimeMillis());
+        }, 0, 10, TimeUnit.SECONDS);
     }
 }

@@ -16,10 +16,12 @@ vertx:
     username: admin
     #内网穿透中转服务web管理页面密码
     password: 10010
+    #host认证有效期，单位秒，默认1天
+    host-auth-expire: 86400
     #内网穿透服务注册验证信息
     token: 2023202
-    #白名单支持正则
-    whiteUrl: "^(/apix/)(\\S+)*$"
+    #http请求白名单，支持正则，比如"^(/api/)(\\S+)*$"
+    whiteUrl:
 # 日志配置
 logging:
   level:

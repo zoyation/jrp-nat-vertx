@@ -39,6 +39,9 @@ public class ReverseServiceImpl implements IReverseService {
     public static final int MAX_PORT = 49151;
     @Autowired
     protected Vertx vertx;
+    /**
+     * 安全服务
+     */
     @Autowired
     protected SecurityService securityService;
     /**
