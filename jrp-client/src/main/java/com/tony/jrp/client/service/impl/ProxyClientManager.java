@@ -313,7 +313,7 @@ public class ProxyClientManager implements InitializingBean {
                                             RegisterResult registerResult = Json.decodeValue(buffer.getBuffer(1, buffer.length()), RegisterResult.class);
                                             if (registerResult.isSuccess()) {
                                                 result.set(true);
-                                                log.info("注册成功：\r\n{}", new JsonObject(buffer).encodePrettily());
+                                                log.info("注册成功：\r\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
                                                 for (ClientProxy proxy : register.getProxies()) {
                                                     if (proxy.getType() != null) {
                                                         //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
