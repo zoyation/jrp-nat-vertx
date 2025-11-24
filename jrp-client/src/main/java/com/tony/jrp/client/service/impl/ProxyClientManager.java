@@ -143,12 +143,18 @@ public class ProxyClientManager implements InitializingBean {
      * 创建代理处理器
      */
     private void closeAndCreateProxyHandler() throws IOException {
-        log.info("停止TCP穿透转发服务");
-        tcpProxyHandler.close();
-        log.info("停止UDP穿透转发服务");
-        udpProxyHandler.close();
-        log.info("停止http正向代理穿透转发服务");
-        httpForwardHandler.close();
+        if (tcpProxyHandler != null) {
+            log.info("停止TCP穿透转发服务");
+            tcpProxyHandler.close();
+        }
+        if (udpProxyHandler != null) {
+            log.info("停止UDP穿透转发服务");
+            udpProxyHandler.close();
+        }
+        if (httpForwardHandler != null) {
+            log.info("停止http正向代理穿透转发服务");
+            httpForwardHandler.close();
+        }
         tcpProxyHandler = new TcpReverseProxyHandler(vertx);
         udpProxyHandler = new UdpReverseProxyHandler(vertx);
         httpForwardHandler = new HttpForwardProxyHandler(vertx);
@@ -304,7 +310,7 @@ public class ProxyClientManager implements InitializingBean {
                                 switch (jrpMsgType) {
                                     case REGISTER_RESULT:
                                         try {
-                                            RegisterResult registerResult = Json.decodeValue(buffer, RegisterResult.class);
+                                            RegisterResult registerResult = Json.decodeValue(buffer.getBuffer(1, buffer.length()), RegisterResult.class);
                                             if (registerResult.isSuccess()) {
                                                 result.set(true);
                                                 log.info("注册成功：\r\n{}", new JsonObject(buffer).encodePrettily());
@@ -404,6 +410,13 @@ public class ProxyClientManager implements InitializingBean {
                                                 break;
                                             case UDP:
                                                 udpProxyHandler.handle(webSocket, msgType, msgId, clientId, proxy.getProxy_pass(), data);
+                                                break;
+                                            case HTTP_PROXY:
+                                            case HTTPS_PROXY:
+                                                httpForwardHandler.handle(webSocket, msgType, msgId, clientId, proxy.getProxy_pass(), data);
+                                                break;
+                                            case SOCKS4:
+                                            case SOCKS5:
                                                 break;
                                         }
                                 }

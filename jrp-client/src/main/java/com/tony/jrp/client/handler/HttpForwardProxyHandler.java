@@ -48,66 +48,64 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
 
     @Override
     public void receiveMsgAndProxy(WebSocket webSocket, String msgId, String clientId, String proxyPass, Buffer data) {
-        /*https:
-        CONNECT s.url.cn:443 HTTP/1.1\r\n
-        Host: s.url.cn:443\r\n
-        Proxy-Connection: keep-alive\r\n
-        User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) TDAppDesktop/3.8.10 Chrome/114.0.5735.289 Electron/25.8.1 Safari/537.36 TDAppDesktop/3.8.11 TDAppDesktopChannel/30001 _tdocFlag/2\r\n\r\n
-        */
-        /*
-        http:
-        GET functional.events.data.microsoft.com:443 HTTP/1.1
-        Host: functional.events.data.microsoft.com:443
-        Proxy-Connection: keep-alive
-        */
         if (data.toString().contains("connection: upgrade")) {
             log.debug("connection: upgrade:{}", data);
         }
-        StringTokenizer tokenizer = new StringTokenizer(data.toString(), "\r\n");
-        SocketAddress socketAddress;
-        int originPort;
-        String originHost;
-        boolean https;
-        if (tokenizer.hasMoreTokens()) {
-            //第一行是请求行，正向代理转发过来的格式为：CONNECT http://192.168.1.11:88/index.html HTTP/1.1\r\n
-            String firstLine = tokenizer.nextToken();
-            String[] request = firstLine.split(" ");
-            if (request.length == 3) {
-                //http://192.168.1.11:88/index.html
-                String method = request[0];
-                String url = request[1];
-                https = method.equals("CONNECT");
-                URL absoluteUrl = null;
-                try {
-                    absoluteUrl = new URL(https ? ("https://" + url) : url);
-                } catch (MalformedURLException e) {
-                    log.error("URL解析异常:{}！", firstLine);
-                    throw new RuntimeException(e);
-                }
-                String uri;
-                if (url.startsWith("connection: upgrade")) {
-                    uri = url;
-                } else {
-                    uri = absoluteUrl.getFile();
-                }
-                //第一行替换“http://192.168.1.11:88/index.html”为“/index.html”
-                Buffer receiveData = Buffer.buffer(firstLine.replace(url, uri)).appendBuffer(data.getBuffer(firstLine.length(), data.length()));
-                originPort = absoluteUrl.getPort();
-                if (originPort == -1) {
-                    originPort = https ? 443 : 80;
-                }
-                originHost = absoluteUrl.getHost();
-                socketAddress = SocketAddress.inetSocketAddress(originPort, absoluteUrl.getHost());
-                NetSocket netSocket = netSocketMap.get(clientId);
+        NetSocket netSocket = netSocketMap.get(clientId);
+        if (netSocket != null) {
+            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
+            sendTcpData(null, null, data, netSocket);
+        } else {
+            synchronized (netSocketMap) {
+                netSocket = netSocketMap.get(clientId);
                 if (netSocket != null) {
-                    //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
-                    sendTcpData(socketAddress.host(), proxyPass, receiveData, netSocket);
+                    sendTcpData(null, null, data, netSocket);
                 } else {
-                    synchronized (netSocketMap) {
-                        netSocket = netSocketMap.get(clientId);
-                        if (netSocket != null) {
-                            sendTcpData(socketAddress.host(), proxyPass, receiveData, netSocket);
-                        } else {
+                    //https:
+                    //CONNECT s.url.cn:443 HTTP/1.1\r\n
+                    //Host: s.url.cn:443\r\n
+                    //Proxy-Connection: keep-alive\r\n
+                    //User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) TDAppDesktop/3.8.10 Chrome/114.0.5735.289 Electron/25.8.1 Safari/537.36 TDAppDesktop/3.8.11 TDAppDesktopChannel/30001 _tdocFlag/2\r\n\r\n
+                    //http:
+                    //GET functional.events.data.microsoft.com:443 HTTP/1.1
+                    //Host: functional.events.data.microsoft.com:443
+                    //Proxy-Connection: keep-alive
+                    StringTokenizer tokenizer = new StringTokenizer(data.toString(), "\r\n");
+                    SocketAddress socketAddress;
+                    int originPort;
+                    String originHost;
+                    boolean https;
+                    if (tokenizer.hasMoreTokens()) {
+                        //第一行是请求行，正向代理转发过来的格式为：CONNECT http://192.168.1.11:88/index.html HTTP/1.1\r\n
+                        //或者 GET http://192.168.1.11:88/index.html HTTP/1.1\r\n
+                        String firstLine = tokenizer.nextToken();
+                        String[] request = firstLine.split(" ");
+                        if (request.length == 3) {
+                            //http://192.168.1.11:88/index.html
+                            String method = request[0];
+                            String url = request[1];
+                            https = method.equals("CONNECT");
+                            URL absoluteUrl;
+                            try {
+                                absoluteUrl = new URL(https ? ("https://" + url) : url);
+                            } catch (MalformedURLException e) {
+                                log.error("URL解析异常:{}！", firstLine);
+                                throw new RuntimeException(e);
+                            }
+                            String uri;
+                            if (url.startsWith("connection: upgrade")) {
+                                uri = url;
+                            } else {
+                                uri = absoluteUrl.getFile();
+                            }
+                            //第一行替换“http://192.168.1.11:88/index.html”为“/index.html”
+                            Buffer receiveData = Buffer.buffer(firstLine.replace(url, uri)).appendBuffer(data.getBuffer(firstLine.length(), data.length()));
+                            originPort = absoluteUrl.getPort();
+                            if (originPort == -1) {
+                                originPort = https ? 443 : 80;
+                            }
+                            originHost = absoluteUrl.getHost();
+                            socketAddress = SocketAddress.inetSocketAddress(originPort, absoluteUrl.getHost());
                             log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, originHost, originPort);
                             CountDownLatch downLatch = new CountDownLatch(1);
                             // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
@@ -129,7 +127,7 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
                                         proxySocket.closeHandler(ch -> {
                                             if (webSocket != null && netSocketMap.remove(clientId) != null) {
                                                 log.debug("客户端[{}]对应的内容请求关闭！", clientId);
-                                                webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendByte(JRPMsgType.CLOSE.getCode()));
+                                                webSocket.write(closeBuffer(msgId));
                                             }
                                         });
                                         proxySocket.handler(response -> {
@@ -152,7 +150,7 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
                                     }
                                 } catch (Exception e) {
                                     log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                                    webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendByte(JRPMsgType.CLOSE.getCode()));
+                                    webSocket.write(closeBuffer(msgId));
                                 } finally {
                                     downLatch.countDown();
                                 }
@@ -161,17 +159,19 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
                                 downLatch.await();
                             } catch (InterruptedException e) {
                                 log.error("转发服务连接处理异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                                webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendByte(JRPMsgType.CLOSE.getCode()));
+                                webSocket.write(closeBuffer(msgId));
                             }
+                        } else {
+                            log.warn("请求消息格式不正确：{}", firstLine);
                         }
+                    } else {
+                        throw new RuntimeException("无法解析请求！");
                     }
                 }
             }
-        } else {
-            throw new RuntimeException("无法解析请求！");
         }
-    }
 
+    }
 
     /**
      * 发送TCP数据
@@ -182,7 +182,7 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
      * @param netSocket  数据发送对象
      */
     private static void sendTcpData(String originHost, String proxyPass, Buffer data, NetSocket netSocket) {
-        if (data.toString().contains("Host:")) {
+        if (originHost != null && proxyPass != null && data.toString().contains("Host:")) {
             //替换Host和Referer值，避免被内网服务器拦截
             netSocket.write(Buffer.buffer(data.toString().replaceAll("Host: .*", "Host: " + originHost).replaceAll("Referer:.*", "referer: " + proxyPass)));
         } else {

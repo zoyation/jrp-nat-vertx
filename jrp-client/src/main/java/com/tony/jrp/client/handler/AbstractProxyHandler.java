@@ -53,6 +53,16 @@ public abstract class AbstractProxyHandler implements Closeable {
     /**
      * 关闭连接
      *
+     * @param msgId 唯一标识
+     * @return 关闭连接消息
+     */
+    public Buffer closeBuffer(String msgId) {
+        return Buffer.buffer(JRPMsgType.CLOSE.getCode()).appendBuffer(Buffer.buffer(msgId));
+    }
+
+    /**
+     * 关闭连接
+     *
      * @param clientId 唯一标识
      */
     public abstract void closeSocket(String clientId);

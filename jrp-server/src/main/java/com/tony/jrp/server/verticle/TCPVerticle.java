@@ -128,7 +128,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
                     //log.warn("客户端连接关闭，丢弃收到的内网代理服务器返回信息，并通知内网服务器断开连接[{}]！", clientAddress);
                     //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
                     log.debug("客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
-                    serverSocket.write(Buffer.buffer(msgId).appendBuffer(Buffer.buffer(JRPMsgType.CLOSE.getCode())));
+                    serverSocket.write(Buffer.buffer(JRPMsgType.CLOSE.getCode() + msgId));
                 }
             };
             clientSocket.handler(dataHandler);
@@ -174,7 +174,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
     @Override
     public void writeData(String msgId, String clientAddress, Buffer realData) {
         NetSocket clientNetSocket = clientTcpSocketMap.get(clientAddress);
-        boolean closeMsg = realData.toString().endsWith(JRPMsgType.CLOSE.getCode());
+        boolean closeMsg = realData.length() >= 1 && realData.getByte(0) == JRPMsgType.CLOSE.getCode();
         if (clientNetSocket != null) {
             if (closeMsg) {
                 log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", clientAddress);
@@ -192,7 +192,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
             log.warn("收到内网代理服务返回的关闭消息，客户端[{}]连接已经失效，不做处理！", clientAddress);
         } else {
             log.warn("收到内网代理服务返回消息，但是客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", clientAddress);
-            serverSocket.write(Buffer.buffer(msgId).appendBuffer(Buffer.buffer(JRPMsgType.CLOSE.getCode())));
+            serverSocket.write(Buffer.buffer(JRPMsgType.CLOSE.getCode() + msgId));
         }
     }
 

@@ -96,7 +96,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                                 proxySocket.closeHandler(ch -> {
                                     if (webSocket != null && netSocketMap.remove(clientId) != null) {
                                         log.debug("客户端[{}]对应的内容请求关闭！", clientId);
-                                        webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendByte(JRPMsgType.CLOSE.getCode()));
+                                        webSocket.write(closeBuffer(msgId));
                                     }
                                 });
                                 proxySocket.handler(response -> {
@@ -119,7 +119,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                             }
                         } catch (Exception e) {
                             log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                            webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendByte(JRPMsgType.CLOSE.getCode()));
+                            webSocket.write(closeBuffer(msgId));
                         } finally {
                             downLatch.countDown();
                         }
@@ -128,7 +128,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                         downLatch.await();
                     } catch (InterruptedException e) {
                         log.error("转发服务连接处理异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                        webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendByte(JRPMsgType.CLOSE.getCode()));
+                        webSocket.write(closeBuffer(msgId));
                     }
                 }
             }
