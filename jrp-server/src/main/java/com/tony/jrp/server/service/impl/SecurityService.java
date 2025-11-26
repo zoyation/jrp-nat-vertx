@@ -158,6 +158,14 @@ public class SecurityService implements InitializingBean {
      * @param host 主机
      * @return 判断ip/主机是否授权过
      */
+    public void addAuthorizedHost(String host) {
+        authorizedHostSet.put(host, properties.getHostAuthExpire() * 1000 + System.currentTimeMillis());
+    }
+
+    /**
+     * @param host 主机
+     * @return 判断ip/主机是否授权过
+     */
     public boolean authorized(String host) {
         return authorizedHostSet.containsKey(host);
     }

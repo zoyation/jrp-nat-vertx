@@ -24,11 +24,11 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
     /**
      * udp缓存
      */
-    private final Map<String, DatagramSocket> datagramSocketMap = new ConcurrentHashMap<>();
+    private final Map<Integer, DatagramSocket> datagramSocketMap = new ConcurrentHashMap<>();
     /**
      * udp最新读或者写时间缓存
      */
-    private final Map<String, Long> udpReadOrWriteTimeMap = new ConcurrentHashMap<>();
+    private final Map<Integer, Long> udpReadOrWriteTimeMap = new ConcurrentHashMap<>();
     private final long cacheTimerId;
 
     public UdpReverseProxyHandler(Vertx vertx) {
@@ -36,7 +36,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
         cacheTimerId = vertx.setPeriodic(1000, (id) -> {
             //1秒内没有操作的进行清理
             udpReadOrWriteTimeMap.entrySet().removeIf(entry -> {
-                String clientAddress = entry.getKey();
+                Integer clientAddress = entry.getKey();
                 boolean timeout = entry.getValue() + 1000L < System.currentTimeMillis();
                 if (timeout) {
                     DatagramSocket remove = datagramSocketMap.remove(clientAddress);
@@ -50,7 +50,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void closeSocket(String clientId) {
+    public void closeSocket(Integer clientId) {
         DatagramSocket datagramSocket = datagramSocketMap.get(clientId);
         if (datagramSocket != null) {
             log.debug("收到断开连接请求，关闭UDP连接[{}]。", clientId);
@@ -63,7 +63,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, String msgId, String clientId, String proxyPass, Buffer data) {
+    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, String proxyPass, Buffer data) {
         int originPort;
         String originHost;
         String[] ipPort = proxyPass.split(":");
@@ -99,7 +99,8 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
                     });
                     netClient.handler(socket -> {
                         log.debug("udp原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
-                        webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(socket.data()));
+                        //Integer remotePort = proxy.getRemote_port();
+                        webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + socket.data().length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(socket.data()));
                     });
                     netClient.send(data, originPort, originHost, rs -> {
                         if (rs.succeeded()) {
@@ -137,7 +138,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
      * @param originPort 原始服务端口
      * @param originHost 原始服务主机
      */
-    private void sendUdpData(String clientId, Buffer data, DatagramSocket netSocket, int originPort, String originHost) {
+    private void sendUdpData(Integer clientId, Buffer data, DatagramSocket netSocket, int originPort, String originHost) {
         netSocket.send(data, originPort, originHost, rs -> {
             if (rs.failed()) {
                 Throwable e = rs.cause();

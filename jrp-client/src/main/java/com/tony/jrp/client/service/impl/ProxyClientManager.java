@@ -305,6 +305,7 @@ public class ProxyClientManager implements InitializingBean {
                                 JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
                                 if (jrpMsgType == null) {
                                     log.error("未知消息类型：{}", buffer);
+                                    webSocket.close();
                                     return;
                                 }
                                 switch (jrpMsgType) {
@@ -321,35 +322,35 @@ public class ProxyClientManager implements InitializingBean {
                                                         String logMessage = "";
                                                         switch (proxy.getType()) {
                                                             case HTTP:
-                                                                message = "HTTP服务[%]穿透后外网地址：[http://%:%]！";
+                                                                message = "HTTP服务[%s]穿透后外网地址：[http://%s:%s]！";
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case HTTPS:
-                                                                message = "HTTPS服务[{}]穿透后外网地址：[https://{}:{}]！";
+                                                                message = "HTTPS服务[{%s}]穿透后外网地址：[https://{%s}:{%s}]！";
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case TCP:
-                                                                message = "TCP服务[{}]穿透后外网地址：[{}:{}]！";
+                                                                message = "TCP服务[{%s}]穿透后外网地址：[{%s}:{%s}]！";
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case UDP:
-                                                                message = "UDP服务[{}]穿透后外网地址：[{}:{}]！";
+                                                                message = "UDP服务[{%s}]穿透后外网地址：[{%s}:{%s}]！";
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case HTTP_PROXY:
-                                                                message = "HTTP代理服务穿透后外网地址：[http://{}:{}]！";
+                                                                message = "HTTP代理服务穿透后外网地址：[http://{%s}:{%s}]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case HTTPS_PROXY:
-                                                                message = "HTTPS代理服务穿透后外网地址：[https://{}:{}]！";
+                                                                message = "HTTPS代理服务穿透后外网地址：[https://{%s}:{%s}]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case SOCKS4:
-                                                                message = "SOCKS4代理服务穿透后外网地址：[{}:{}]！";
+                                                                message = "SOCKS4代理服务穿透后外网地址：[{%s}:{%s}]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case SOCKS5:
-                                                                message = "SOCKS5代理服务穿透后外网地址：[{}:{}]！";
+                                                                message = "SOCKS5代理服务穿透后外网地址：[{%s}:{%s}]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                         }
@@ -374,10 +375,12 @@ public class ProxyClientManager implements InitializingBean {
                                                     }
                                                 });
                                             } else {
+                                                webSocket.close();
                                                 errorMessage = registerResult.getMsg();
                                                 log.error("注册失败：{}", errorMessage);
                                             }
                                         } catch (Exception e) {
+                                            webSocket.close();
                                             errorMessage = e.getMessage();
                                             log.error("注册异常：{}", errorMessage, e);
                                         } finally {
@@ -386,34 +389,28 @@ public class ProxyClientManager implements InitializingBean {
                                         break;
                                     case CLOSE:
                                     case RECEIVE:
-                                        //获取消息类型后面的buffer
-                                        buffer = buffer.getBuffer(1, buffer.length());
-                                        //代理端口长度1位
-                                        int portLen = Integer.parseInt(buffer.getString(0, 1));
                                         //代理端口
-                                        String remotePort = buffer.getString(1, 1 + portLen);
-                                        //请求唯一标识长度
-                                        int clientLen = Integer.parseInt(buffer.getString(1 + portLen, 1 + portLen + 2));
-                                        //请求唯一标识（IP+端口）
-                                        String clientId = buffer.getString(1 + portLen + 2, 1 + portLen + 2 + clientLen);
-                                        //代理端口长度1位+代理端口+请求唯一标识长度+请求唯一标识（IP+端口）
-                                        String msgId = portLen + remotePort + clientLen + clientId;
+                                        Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + 4).getInt(0);
+                                        //请求唯一标识
+                                        Integer requestId = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1 + 4, JRPMsgType.TYPE_LEN + 1 + 4 + 4).getInt(0);
+                                        //获取消息标识：代理端口+请求id
+                                        Buffer msgId = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + 4 + 4);
                                         //收到外网穿透服务器发送的客户端请求通知
-                                        Buffer data = buffer.getBuffer(1 + portLen + 2 + clientLen, buffer.length());
-                                        log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", clientId);
+                                        Buffer data = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1 + 4 + 4, buffer.length());
+                                        log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", requestId);
                                         ClientProxy proxy = remotePortClientMap.get(remotePort);
                                         switch (proxy.getType()) {
                                             case HTTP:
                                             case HTTPS:
                                             case TCP:
-                                                tcpProxyHandler.handle(webSocket, msgType, msgId, clientId, proxy.getProxy_pass(), data);
+                                                tcpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy.getProxy_pass(), data);
                                                 break;
                                             case UDP:
-                                                udpProxyHandler.handle(webSocket, msgType, msgId, clientId, proxy.getProxy_pass(), data);
+                                                udpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy.getProxy_pass(), data);
                                                 break;
                                             case HTTP_PROXY:
                                             case HTTPS_PROXY:
-                                                httpForwardHandler.handle(webSocket, msgType, msgId, clientId, proxy.getProxy_pass(), data);
+                                                httpForwardHandler.handle(webSocket, msgType, msgId, requestId, proxy.getProxy_pass(), data);
                                                 break;
                                             case SOCKS4:
                                             case SOCKS5:
@@ -437,7 +434,7 @@ public class ProxyClientManager implements InitializingBean {
                             });
                             String registerInfo = Json.encode(register);
                             log.info("开始发送注册消息：\r\n{}", register);
-                            webSocket.write(Buffer.buffer(registerInfo)).onComplete((rt) -> {
+                            webSocket.write(Buffer.buffer(JRPMsgType.REGISTER.codeArray()).appendBuffer(Buffer.buffer(registerInfo))).onComplete((rt) -> {
                                 if (rt.succeeded()) {
                                     log.info("发送注册消息成功，等待返回，注册消息为：\r\n{}", register);
                                 } else {

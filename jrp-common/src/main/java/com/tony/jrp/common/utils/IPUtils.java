@@ -16,15 +16,14 @@ public class IPUtils {
             throw new RuntimeException(e);
         }
         long ipLong;
+        byte[] bytes = address.getAddress();
         if (address instanceof Inet4Address) { // 确保是IPv6地址
-            byte[] bytes = address.getAddress();
             ipLong = Integer.valueOf((bytes[3] & 0xFF)).longValue() << 24
                     | Integer.valueOf((bytes[2] & 0xFF)).longValue() << 16
                     | Integer.valueOf((bytes[1] & 0xFF)).longValue() << 8
                     | Integer.valueOf((bytes[0] & 0xFF)).longValue();
 
         } else {
-            byte[] bytes = address.getAddress();
             ipLong = ((long) bytes[15] & 0xFF) << 112
                     | ((long) bytes[14] & 0xFF) << 104
                     | ((long) bytes[13] & 0xFF) << 96

@@ -5,12 +5,20 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.Random;
 
+/**
+ * 令牌工具类
+ */
 public class TokenUtils {
     public static String runtimeToken = generateToken();
 
     private TokenUtils() {
     }
 
+    /**
+     * 生成令牌
+     *
+     * @return 令牌
+     */
     public static String generateToken() {
         String s = String.valueOf(System.currentTimeMillis() + new Random().nextInt());
 
@@ -24,6 +32,12 @@ public class TokenUtils {
         }
     }
 
+    /**
+     * MD5加密
+     *
+     * @param inStr 待加密的字符串
+     * @return 加密后的字符串
+     */
     public static String MD5(String inStr) {
         MessageDigest md5;
         try {

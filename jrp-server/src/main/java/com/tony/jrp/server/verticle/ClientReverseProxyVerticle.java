@@ -21,10 +21,19 @@ import java.util.stream.Collectors;
 @Slf4j
 public class ClientReverseProxyVerticle extends AbstractVerticle {
     /**
+     * 远程端口byte数组长度。
+     */
+    public static final int REMOTE_PORT_LEN = 4;
+    /**
+     * 请求唯一ID（int类型）对应byte数组长度，4字节。
+     */
+    public static final int REQUEST_ID_LEN = 4;
+    /**
      * ”ip:端口“地址总长度数值对应字符串长度。
      */
     public static final int CLIENT_IP_PORT_LEN = 2;
     public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    public static final int TYPE_AND_MSG_ID_BYTE_SIZE = 9;
     /**
      * 持有和内网代理服务器的连接，收到客户端请求消息后，通知内网代理服务器
      */
@@ -42,6 +51,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
      * 所有代理Verticle
      */
     private final Map<Integer, AbstractProxyVerticle> proxyVerticleMap = new ConcurrentHashMap<>();
+
 
     /**
      * 构造函数
@@ -61,24 +71,24 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
         serverSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
         /* 重新设置socket的handler，处理返回消息 */
         serverSocket.handler(data -> {
-            String msgId, clientAddress;
-            Buffer realData;
+            JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
             //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
             //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
-            int portLen = Integer.parseInt(data.getString(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1));
             //外网访问端口，整数，比如1024
-            Integer remotePort = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + portLen).toString());
-            //请求唯一标识字符串长度（两位整数，不会超过100，比如110.242.69.21:49151对应长度值为19个字符‌，‌IPv6字符串的标准长度为39个字符‌，包括冒号（:）和十六进制数字‌）
-            int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
-            clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
-            msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
-            realData = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen, data.length());
+            Integer remotePort = data.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN).getInt(0);
+            //int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
+            //clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
+            Integer requestId = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN + REQUEST_ID_LEN).getInt(0);
+            //获取消息标识：代理端口+请求id
+            Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN + REQUEST_ID_LEN);
+            Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
             AbstractProxyVerticle verticle = proxyVerticleMap.get(remotePort);
             if (verticle == null) {
-                log.warn("收到内网代理服务返回消息，但是未找到端口对应代理，客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", clientAddress);
-                serverSocket.write(Buffer.buffer(msgId).appendBuffer(Buffer.buffer(JRPMsgType.CLOSE.getCode())));
+                log.warn("端口[{}]收到内网代理服务返回消息，但是未找到端口对应代理，客户端标识id[{}]对应连接已经失效，发送关闭连接消息到内网代理服务！", remotePort, requestId);
+                serverSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
             } else {
-                verticle.writeData(msgId, clientAddress, realData);
+                String clientAddress = verticle.getClientAddress(requestId);
+                verticle.writeData(msgType, msgId, clientAddress, realData);
             }
         });
         //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端

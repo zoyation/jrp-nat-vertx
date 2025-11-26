@@ -118,8 +118,9 @@ public class ProxyServerManager implements InitializingBean {
             SocketAddress remoteAddress = serverWebSocket.remoteAddress();
             String textHandlerID = serverWebSocket.textHandlerID();
             serverWebSocket.handler(buffer -> {
-                if (buffer != null) {
-                    String registerJson = buffer.toString();
+                Buffer resultBuffer = Buffer.buffer(JRPMsgType.REGISTER_RESULT.codeArray());
+                if (buffer != null && buffer.length() > 0 && buffer.getByte(0) == JRPMsgType.REGISTER.getCode()) {
+                    String registerJson = buffer.getString(1, buffer.length());
                     String prettily;
                     try {
                         prettily = new JsonObject(registerJson).encodePrettily();
@@ -170,7 +171,7 @@ public class ProxyServerManager implements InitializingBean {
                                     serverWebSocket.close();
                                 });
                                 log.info("来自[{}]的服务注册成功,textHandlerID[{}]:\r\n{}", remoteAddress, textHandlerID, prettily);
-                                serverWebSocket.write(Buffer.buffer(new byte[]{JRPMsgType.REGISTER_RESULT.getCode()}).appendBuffer(Buffer.buffer(Json.encode(RegisterResult.success("注册成功！")))));
+                                serverWebSocket.write(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(RegisterResult.success("注册成功！")))));
                                 RegisterInfo registerInfo = new RegisterInfo();
                                 registerInfo.setId(textHandlerID);
                                 registerInfo.setHost(remoteAddress.host());
@@ -191,7 +192,7 @@ public class ProxyServerManager implements InitializingBean {
                                     vertx.cancelTimer(serverPing);
                                 }
                                 if (!serverWebSocket.isClosed()) {
-                                    serverWebSocket.end(Buffer.buffer(Json.encode(RegisterResult.error(e.getMessage()))));
+                                    serverWebSocket.end(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(RegisterResult.error(e.getMessage())))));
                                     serverWebSocket.close();
                                 }
                                 log.warn("websocket[{}]注册异常，开始停止代理：{}", remoteAddress, clientRegister);
@@ -201,15 +202,15 @@ public class ProxyServerManager implements InitializingBean {
                             }
                         }).onFailure(res -> {
                             log.error("来自[{}]的服务注册失败:{}", remoteAddress, res.getMessage(), res);
-                            serverWebSocket.end(Buffer.buffer(Json.encode(RegisterResult.error(res.getMessage()))));
+                            serverWebSocket.end(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(RegisterResult.error(res.getMessage())))));
                         });
                     } else {
                         log.warn("来自[{}]的非法请求，参数无效，操作失败！", remoteAddress.host());
-                        serverWebSocket.end(Buffer.buffer(Json.encode(RegisterResult.error("非法请求，操作失败！"))));
+                        serverWebSocket.end(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(RegisterResult.error("非法请求，操作失败！")))));
                     }
                 } else {
                     log.warn("来自[{}]的非法无参请求，操作失败！", remoteAddress.host());
-                    serverWebSocket.end(Buffer.buffer(Json.encode(RegisterResult.error("无参数，操作失败！"))));
+                    serverWebSocket.end(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(RegisterResult.error("无参数，操作失败！")))));
                 }
             });
         });

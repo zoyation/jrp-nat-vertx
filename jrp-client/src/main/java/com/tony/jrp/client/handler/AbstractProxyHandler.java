@@ -13,6 +13,7 @@ import java.io.Closeable;
  */
 @Slf4j
 public abstract class AbstractProxyHandler implements Closeable {
+    public static final int TYPE_AND_MSG_ID_BYTE_SIZE = 9;
     protected Vertx vertx;
 
     public AbstractProxyHandler(Vertx vertx) {
@@ -24,12 +25,12 @@ public abstract class AbstractProxyHandler implements Closeable {
      *
      * @param registerWebSocket 注册连接
      * @param msgType           消息类型
-     * @param clientId          唯一标识
      * @param msgId             消息id
+     * @param clientId          唯一标识
      * @param proxyPass         代理信息
      * @param data              数据
      */
-    public void handle(WebSocket registerWebSocket, byte msgType, String clientId, String msgId, String proxyPass, Buffer data) {
+    public void handle(WebSocket registerWebSocket, byte msgType, Buffer msgId, Integer clientId, String proxyPass, Buffer data) {
         log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", clientId);
         try {
             if (msgType == JRPMsgType.CLOSE.getCode()) {
@@ -56,8 +57,8 @@ public abstract class AbstractProxyHandler implements Closeable {
      * @param msgId 唯一标识
      * @return 关闭连接消息
      */
-    public Buffer closeBuffer(String msgId) {
-        return Buffer.buffer(JRPMsgType.CLOSE.getCode()).appendBuffer(Buffer.buffer(msgId));
+    public Buffer closeBuffer(Buffer msgId) {
+        return Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId);
     }
 
     /**
@@ -65,7 +66,7 @@ public abstract class AbstractProxyHandler implements Closeable {
      *
      * @param clientId 唯一标识
      */
-    public abstract void closeSocket(String clientId);
+    public abstract void closeSocket(Integer clientId);
 
     /**
      * 接受消息，发请求到内网服务并返回结果
@@ -76,5 +77,5 @@ public abstract class AbstractProxyHandler implements Closeable {
      * @param proxyPass 代理配置信息
      * @param data      数据
      */
-    protected abstract void receiveMsgAndProxy(WebSocket webSocket, String msgId, String clientId, String proxyPass, Buffer data);
+    protected abstract void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, String proxyPass, Buffer data);
 }

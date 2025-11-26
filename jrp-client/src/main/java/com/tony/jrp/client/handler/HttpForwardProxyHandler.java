@@ -28,14 +28,14 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
     /**
      * 代理请求对象缓存
      */
-    private final Map<String, NetSocket> netSocketMap = new ConcurrentHashMap<>();
+    private final Map<Integer, NetSocket> netSocketMap = new ConcurrentHashMap<>();
 
     public HttpForwardProxyHandler(Vertx vertx) {
         super(vertx);
     }
 
     @Override
-    public void closeSocket(String clientId) {
+    public void closeSocket(Integer clientId) {
         NetSocket netSocket = netSocketMap.get(clientId);
         if (netSocket != null) {
             log.debug("收到断开连接请求，关闭TCP连接[{}]。", clientId);
@@ -47,7 +47,7 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, String msgId, String clientId, String proxyPass, Buffer data) {
+    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, String proxyPass, Buffer data) {
         if (data.toString().contains("connection: upgrade")) {
             log.debug("connection: upgrade:{}", data);
         }
@@ -99,7 +99,9 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
                                 uri = absoluteUrl.getFile();
                             }
                             //第一行替换“http://192.168.1.11:88/index.html”为“/index.html”
-                            Buffer receiveData = Buffer.buffer(firstLine.replace(url, uri)).appendBuffer(data.getBuffer(firstLine.length(), data.length()));
+                            Buffer requestFirestLine = Buffer.buffer(firstLine.replace(url, uri));
+                            Buffer otherBuffer = data.getBuffer(firstLine.length(), data.length());
+                            Buffer receiveData = Buffer.buffer(requestFirestLine.length() + otherBuffer.length()).appendBuffer(requestFirestLine).appendBuffer(otherBuffer);
                             originPort = absoluteUrl.getPort();
                             if (originPort == -1) {
                                 originPort = https ? 443 : 80;
@@ -135,7 +137,7 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
                                                 log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
                                                 //消息标志符+客户端远程ID(ip+端口)长度2位+远程ID
                                                 //Integer remotePort = proxy.getRemote_port();
-                                                webSocket.write(Buffer.buffer(JRPMsgType.RESPONSE.getCode() + msgId).appendBuffer(response));
+                                                webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + response.length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(response));
                                             } else {
                                                 log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
                                             }

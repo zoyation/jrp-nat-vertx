@@ -1,5 +1,6 @@
 package com.tony.jrp.server.verticle;
 
+import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.server.service.impl.SecurityService;
@@ -14,7 +15,9 @@ import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.Router;
 import lombok.extern.slf4j.Slf4j;
 
+import java.nio.ByteBuffer;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * udp穿透服务
@@ -28,6 +31,15 @@ public class UDPVerticle extends AbstractProxyVerticle {
     private DatagramSocket datagramSocket;
 
     HttpServer httpServer;
+    /**
+     * 清理定时任务id
+     */
+    long cleanUpId = 0;
+    /**
+     * 添加requestId管理
+     */
+    private final Map<Integer, Long> requestIdTimestamps = new ConcurrentHashMap<>();
+    private static final long REQUEST_TIMEOUT = 30000; // 30秒超时
 
     public UDPVerticle(ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
         super(serverSocket, securityService, clientRegister, clientProxy);
@@ -36,6 +48,7 @@ public class UDPVerticle extends AbstractProxyVerticle {
     @Override
     public void init() {
         Integer remotePort = clientProxy.getRemote_port();
+        byte[] remotePortByte = ByteBuffer.allocate(4).putInt(remotePort).array();
         // 创建TCP服务器
         DatagramSocketOptions options = new DatagramSocketOptions();
         options.setReceiveBufferSize(BUFFER_SIZE);
@@ -48,9 +61,12 @@ public class UDPVerticle extends AbstractProxyVerticle {
             log.debug("[{}] 收到UDP数据!", socketAddress.toString());
             if (securityService.authorized(socketAddress.host())) {
                 String clientAddress = socketAddress.toString();
-                //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
-                String msgId = remotePort.toString().length() + remotePort.toString() + clientAddress.length() + clientAddress;
-                serverSocket.write(Buffer.buffer(msgId).appendBuffer(packet.data()));
+                // 请求唯一标识
+                int requestId = newRequestId(clientAddress);
+                requestIdTimestamps.put(requestId, System.currentTimeMillis());
+                //代理端口（int转byte,32位，4字节）+请求唯一标识（和clientAddress绑定的int整数,32位，4字节）
+                Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE).appendBytes(remotePortByte).appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
+                serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + packet.data().length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(packet.data()));
             } else {
                 log.warn("收到自客户端[{}]的UDP数据，客户端未通过认证，不做处理!", socketAddress);
             }
@@ -89,10 +105,27 @@ public class UDPVerticle extends AbstractProxyVerticle {
         });
         httpServer.requestHandler(router);
         httpServer.listen(remotePort);
+        cleanUpId = vertx.setPeriodic(1000, (id) -> this.cleanupExpiredRequests());
+    }
+
+    /**
+     * 清理请求id缓存
+     */
+    private void cleanupExpiredRequests() {
+        long now = System.currentTimeMillis();
+        requestIdTimestamps.entrySet().removeIf(entry ->
+        {
+            boolean remove = now - entry.getValue() > REQUEST_TIMEOUT;
+            if (remove) {
+                log.debug("清理过期的请求id:{}", entry.getKey());
+                this.release(entry.getKey());
+            }
+            return remove;
+        });
     }
 
     @Override
-    public void writeData(String msgId, String clientAddress, Buffer realData) {
+    public void writeData(JRPMsgType msgType, Buffer msgId, String clientAddress, Buffer realData) {
         log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", clientAddress);
         //发送udp数据
         if (datagramSocket != null) {
@@ -102,9 +135,12 @@ public class UDPVerticle extends AbstractProxyVerticle {
     }
 
     @Override
-    public void stop() {
+    public void stop() throws Exception {
         log.info("清理端口[{}]下代理和缓存！", clientProxy.getRemote_port());
+        vertx.cancelTimer(cleanUpId);
+        requestIdTimestamps.clear();
         datagramSocket.close();
         httpServer.close();
+        super.stop();
     }
 }
