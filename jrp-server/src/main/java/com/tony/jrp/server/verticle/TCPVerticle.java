@@ -15,21 +15,16 @@ import io.vertx.core.net.SocketAddress;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * TCP穿透服务
  */
 @Slf4j
-public class TCPVerticle extends AbstractProxyVerticle {
+public class TCPVerticle extends AbstractProxyVerticle<NetSocket> {
 
     public static final String CERTIFICATE_UNKNOWN = "certificate_unknown";
-    /**
-     * 用户tcp请求客户端socket
-     */
-    private final Map<String, NetSocket> clientTcpSocketMap = new ConcurrentHashMap<>();
 
     private NetServer server;
 
@@ -39,8 +34,8 @@ public class TCPVerticle extends AbstractProxyVerticle {
 
     @Override
     public void init() {
-        Integer remotePort = clientProxy.getRemote_port();
-        byte[] remotePortByte = ByteBuffer.allocate(4).putInt(remotePort).array();
+        int remotePort = clientProxy.getRemote_port();
+        byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
         // 创建TCP服务器
         NetServerOptions options = new NetServerOptions();
         options.setIdleTimeout(IDLE_TIMEOUT);
@@ -59,7 +54,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
             log.debug("[{}] 创建连接!", socketAddress.toString());
             String clientAddress = socketAddress.toString();
             // 请求唯一标识
-            int requestId = newRequestId(clientAddress);
+            int requestId = socketAddress.hashCode();
             //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
             //String msgId = remotePort.toString().length() + remotePort.toString() + clientAddress.length() + clientAddress;
             //代理端口（int转byte,32位，4字节）+请求唯一标识（和clientAddress绑定的int整数,32位，4字节）
@@ -71,7 +66,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
             Handler<Buffer> dataHandler = data -> {
                 receiveDataFlag.set(true);
                 //authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
-                boolean authorized = (!httpFlag && securityService.authorized(host)) || clientTcpSocketMap.containsKey(clientAddress);
+                boolean authorized = (!httpFlag && securityService.authorized(host)) || this.hasRequest(requestId);
                 //未授权非HTTP请求都屏蔽
                 if (!authorized && !securityService.isHTTPRequest(data)) {
                     log.warn("关闭非HTTP(S)类型未授权请求[{}]！", clientAddress);
@@ -81,10 +76,10 @@ public class TCPVerticle extends AbstractProxyVerticle {
                         log.warn("[{}]-[{}]类型服务，授权通过，不支持HTTP(S)访问:{}！", clientAddress, clientProxy.getType().name(), remotePort);
                         //String warnResponse = securityService.getHttpWarnResponse();
                         clientSocket.end(Buffer.buffer(securityService.getOKResponse()));
-                        closeSocket(clientAddress, clientSocket);
+                        this.closeRequest(requestId, clientSocket);
                     } else {
                         log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
-                        clientTcpSocketMap.put(clientAddress, clientSocket);
+                        this.cacheRequest(requestId, clientSocket);
                         serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
                         if (serverSocket.writeQueueFull()) {
                             serverSocket.pause();
@@ -102,7 +97,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
                         if (securityService.authorizeHttp(clientRegister, host, data)) {
                             if (httpFlag) {
                                 log.debug("HTTP(S)客户端[{}]请求验证通过，开始转发消息!", clientAddress);
-                                clientTcpSocketMap.put(clientAddress, clientSocket);
+                                this.cacheRequest(requestId, clientSocket);
                                 serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
                             } else {
                                 log.debug("非HTTP(S)客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);
@@ -111,7 +106,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
                             }
                         } else if (securityService.canToNetSocket(data.toString())) {
                             log.warn("[{}]websocket或CONNECT未授权访问:{}，直接关闭！", clientAddress, remotePort);
-                            closeSocket(clientAddress, clientSocket);
+                            this.closeRequest(requestId, clientSocket);
                         } else {
                             // 假设我们在处理HTTP请求
                             log.warn("[{}]HTTP未授权访问:{}，浏览器弹窗输入认证信息！", clientAddress, remotePort);
@@ -119,7 +114,7 @@ public class TCPVerticle extends AbstractProxyVerticle {
                             clientSocket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
                         }
                     } else {
-                        closeSocket(clientAddress, clientSocket);
+                        this.closeRequest(requestId, clientSocket);
                         log.warn("[{}]非法访问:{}，直接关闭！", host, remotePort);
                         //return false;
                     }
@@ -127,8 +122,8 @@ public class TCPVerticle extends AbstractProxyVerticle {
             };
             Handler<Void> closeHandler = voidHandler -> {
                 log.debug("客户端[{}]连接关闭！", clientAddress);
-                if (clientTcpSocketMap.containsKey(clientAddress)) {
-                    closeSocket(clientAddress, clientSocket);
+                if (this.hasRequest(requestId)) {
+                    this.closeRequest(requestId, clientSocket);
                     //log.warn("客户端连接关闭，丢弃收到的内网代理服务器返回信息，并通知内网服务器断开连接[{}]！", clientAddress);
                     //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
                     log.debug("客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
@@ -144,17 +139,15 @@ public class TCPVerticle extends AbstractProxyVerticle {
             vertx.setTimer(200, (id) -> {
                 if (authorized && !httpFlag && !receiveDataFlag.get()) {
                     //关闭历史未移除连接
-                    if (clientTcpSocketMap.containsKey(clientAddress)) {
-                        clientTcpSocketMap.remove(clientAddress).close();
-                    }
+                    this.closeRequest(requestId, clientSocket);
                     log.debug("发送来自客户端[{}]的非HTTP初始化请求!", clientAddress);
-                    clientTcpSocketMap.put(clientAddress, clientSocket);
+                    this.cacheRequest(requestId, clientSocket);
                     serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId));
                 }
                 //未授权不是http请求，是非法请求
                 if (!authorized && !httpFlag && !receiveDataFlag.get()) {
                     log.warn("来自客户端[{}]的非HTTP初始化请求，未通过认证，直接关闭!", clientAddress);
-                    closeSocket(clientAddress, clientSocket);
+                    this.closeRequest(requestId, clientSocket);
                 }
             });
         }).exceptionHandler(err -> {
@@ -175,42 +168,34 @@ public class TCPVerticle extends AbstractProxyVerticle {
         });
     }
 
-    /**
-     * 关闭socket
-     *
-     * @param clientAddress
-     * @param clientSocket
-     */
-    private void closeSocket(String clientAddress, NetSocket clientSocket) {
-        clientTcpSocketMap.remove(clientAddress);
-        clientSocket.close();
-        Integer requestId = this.getBindRequestId(clientAddress);
-        if (requestId != null) {
-            this.release(requestId);
-        }
+
+    @Override
+    protected void closeRequest(NetSocket request) {
+        request.close();
     }
 
     @Override
-    public void writeData(JRPMsgType msgType, Buffer msgId, String clientAddress, Buffer realData) {
-        NetSocket clientNetSocket = clientTcpSocketMap.get(clientAddress);
+    public void writeData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer realData) {
+        NetSocket clientNetSocket = this.getRequest(requestId);
         if (clientNetSocket != null) {
+            SocketAddress remoteAddress = clientNetSocket.remoteAddress();
             if (JRPMsgType.CLOSE == msgType) {
-                log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", clientAddress);
-                closeSocket(clientAddress, clientNetSocket);
+                log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", remoteAddress);
+                this.closeRequest(requestId, clientNetSocket);
             } else if (JRPMsgType.RESPONSE == msgType) {
-                log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", clientAddress);
+                log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", remoteAddress);
                 clientNetSocket.write(realData);
                 if (clientNetSocket.writeQueueFull()) {
                     clientNetSocket.pause();
                     clientNetSocket.drainHandler(done -> clientNetSocket.resume());
                 }
             } else {
-                log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", clientAddress, msgType);
+                log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", remoteAddress, msgType);
             }
         } else if (JRPMsgType.CLOSE == msgType) {
-            log.warn("收到内网代理服务返回的关闭消息，客户端[{}]连接已经失效，不做处理！", clientAddress);
+            log.warn("收到内网代理服务返回的关闭消息，客户端[{}]连接已经失效，不做处理！", requestId);
         } else {
-            log.warn("收到内网代理服务返回消息，但是客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", clientAddress);
+            log.warn("收到内网代理服务返回消息，但是客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", requestId);
             serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
         }
     }
@@ -218,9 +203,8 @@ public class TCPVerticle extends AbstractProxyVerticle {
     @Override
     public void stop() throws Exception {
         log.info("清理端口[{}]下代理和缓存！", clientProxy.getRemote_port());
-        clientTcpSocketMap.values().forEach(NetSocket::close);
+        //clientSocketMap.values().forEach(NetSocket::close);
         server.close();
-        clientTcpSocketMap.clear();
         super.stop();
     }
 }

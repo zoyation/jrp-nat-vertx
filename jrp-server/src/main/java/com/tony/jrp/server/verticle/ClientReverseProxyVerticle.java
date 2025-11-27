@@ -23,7 +23,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
     /**
      * 远程端口byte数组长度。
      */
-    public static final int REMOTE_PORT_LEN = 4;
+    public static final int REMOTE_PORT_LEN = 2;
     /**
      * 请求唯一ID（int类型）对应byte数组长度，4字节。
      */
@@ -75,20 +75,19 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
             //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
             //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
             //外网访问端口，整数，比如1024
-            Integer remotePort = data.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN).getInt(0);
+            Integer remotePort = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN).getUnsignedShort(0);
             //int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
             //clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
-            Integer requestId = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN + REQUEST_ID_LEN).getInt(0);
+            Integer requestId = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN).getInt(0);
             //获取消息标识：代理端口+请求id
-            Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN + REQUEST_ID_LEN);
-            Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
+            Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN);
+            Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
             AbstractProxyVerticle verticle = proxyVerticleMap.get(remotePort);
             if (verticle == null) {
                 log.warn("端口[{}]收到内网代理服务返回消息，但是未找到端口对应代理，客户端标识id[{}]对应连接已经失效，发送关闭连接消息到内网代理服务！", remotePort, requestId);
                 serverSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
             } else {
-                String clientAddress = verticle.getClientAddress(requestId);
-                verticle.writeData(msgType, msgId, clientAddress, realData);
+                verticle.writeData(msgType, msgId, requestId, realData);
             }
         });
         //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端

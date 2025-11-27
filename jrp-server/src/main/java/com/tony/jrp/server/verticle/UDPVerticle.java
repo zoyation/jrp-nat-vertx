@@ -7,6 +7,7 @@ import com.tony.jrp.server.service.impl.SecurityService;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.datagram.DatagramPacket;
 import io.vertx.core.datagram.DatagramSocket;
 import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.*;
@@ -16,6 +17,7 @@ import io.vertx.ext.web.Router;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -23,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * udp穿透服务
  */
 @Slf4j
-public class UDPVerticle extends AbstractProxyVerticle {
+public class UDPVerticle extends AbstractProxyVerticle<DatagramPacket> {
     public static final String AUTHORIZATION = "Authorization";
     /**
      * udp请求处理对象
@@ -47,8 +49,8 @@ public class UDPVerticle extends AbstractProxyVerticle {
 
     @Override
     public void init() {
-        Integer remotePort = clientProxy.getRemote_port();
-        byte[] remotePortByte = ByteBuffer.allocate(4).putInt(remotePort).array();
+        int remotePort = clientProxy.getRemote_port();
+        byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
         // 创建TCP服务器
         DatagramSocketOptions options = new DatagramSocketOptions();
         options.setReceiveBufferSize(BUFFER_SIZE);
@@ -62,7 +64,8 @@ public class UDPVerticle extends AbstractProxyVerticle {
             if (securityService.authorized(socketAddress.host())) {
                 String clientAddress = socketAddress.toString();
                 // 请求唯一标识
-                int requestId = newRequestId(clientAddress);
+                int requestId = socketAddress.hashCode();
+                this.cacheRequest(requestId, packet);
                 requestIdTimestamps.put(requestId, System.currentTimeMillis());
                 //代理端口（int转byte,32位，4字节）+请求唯一标识（和clientAddress绑定的int整数,32位，4字节）
                 Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE).appendBytes(remotePortByte).appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
@@ -108,6 +111,10 @@ public class UDPVerticle extends AbstractProxyVerticle {
         cleanUpId = vertx.setPeriodic(1000, (id) -> this.cleanupExpiredRequests());
     }
 
+    @Override
+    protected void closeRequest(DatagramPacket request) {
+    }
+
     /**
      * 清理请求id缓存
      */
@@ -117,20 +124,20 @@ public class UDPVerticle extends AbstractProxyVerticle {
         {
             boolean remove = now - entry.getValue() > REQUEST_TIMEOUT;
             if (remove) {
-                log.debug("清理过期的请求id:{}", entry.getKey());
-                this.release(entry.getKey());
+                Integer requestId = entry.getKey();
+                log.debug("清理过期的请求id:{}", requestId);
+                this.closeRequest(requestId, this.getRequest(requestId));
             }
             return remove;
         });
     }
 
     @Override
-    public void writeData(JRPMsgType msgType, Buffer msgId, String clientAddress, Buffer realData) {
-        log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", clientAddress);
-        //发送udp数据
-        if (datagramSocket != null) {
-            String[] hostAndPort = clientAddress.split(":");
-            datagramSocket.send(realData, Integer.parseInt(hostAndPort[1]), hostAndPort[0]);
+    public void writeData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer realData) {
+        log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", requestId);
+        DatagramPacket datagramPacket = this.getRequest(requestId);
+        if (datagramPacket != null) {
+            datagramSocket.send(realData, datagramPacket.sender().port(), datagramPacket.sender().host());
         }
     }
 

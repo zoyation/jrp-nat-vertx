@@ -16,14 +16,14 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 /**
  * 穿透服务基础类
  */
-public abstract class AbstractProxyVerticle extends AbstractVerticle {
+public abstract class AbstractProxyVerticle<T> extends AbstractVerticle {
     /**
      * 读写超时时间，单位秒
      */
     public static final int IDLE_TIMEOUT = 10;
     public static final int WRITE_QUEUE_MAX_SIZE = 100;
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
-    public static final int MSG_BYTE_SIZE = 8;
+    public static final int MSG_BYTE_SIZE = 6;
 
     /**
      * 持有和内网代理服务器的连接，收到客户端请求消息后，通知内网代理服务器
@@ -41,6 +41,8 @@ public abstract class AbstractProxyVerticle extends AbstractVerticle {
      * 内网代理服务注册信息
      */
     protected final ClientProxy clientProxy;
+
+    private final Map<Integer, T> clientSocketMap = new ConcurrentHashMap<>();
 
 
     /**
@@ -102,25 +104,6 @@ public abstract class AbstractProxyVerticle extends AbstractVerticle {
         this.clientProxy = clientProxy;
     }
 
-    /**
-     * 生成请求ID
-     *
-     * @param clientAddress 客户端地址
-     * @return 请求ID
-     */
-    public int newRequestId(String clientAddress) {
-        return requestIdPool.acquire(clientAddress);
-    }
-
-    /**
-     * 生成请求ID
-     *
-     * @param clientAddress 客户端地址
-     * @return 请求ID
-     */
-    public Integer getBindRequestId(String clientAddress) {
-        return requestIdPool.getId(clientAddress);
-    }
 
     /**
      * 释放请求ID
@@ -129,16 +112,6 @@ public abstract class AbstractProxyVerticle extends AbstractVerticle {
      */
     public String release(Integer id) {
         return requestIdPool.release(id);
-    }
-
-    /**
-     * 获取客户端地址
-     *
-     * @param requestId 请求ID
-     * @return 客户端地址
-     */
-    public String getClientAddress(Integer requestId) {
-        return requestIdPool.getResource(requestId);
     }
 
     @Override
@@ -154,15 +127,70 @@ public abstract class AbstractProxyVerticle extends AbstractVerticle {
     /**
      * 初始化穿透服务
      */
-    public abstract void init();
+    protected abstract void init();
+
+    /**
+     * 移除请求
+     *
+     * @param requestId 请求ID
+     */
+    protected T removeRequest(Integer requestId) {
+        return clientSocketMap.remove(requestId);
+    }
+
+    /**
+     * 缓存请求
+     *
+     * @param requestId 请求ID
+     * @param request   请求信息
+     */
+    protected void cacheRequest(int requestId, T request) {
+        clientSocketMap.put(requestId, request);
+    }
+
+    /**
+     * 获取缓存的请求
+     *
+     * @param requestId 请求ID
+     */
+    protected T getRequest(int requestId) {
+        return clientSocketMap.get(requestId);
+    }
+
+    /**
+     * 获取缓存的请求
+     *
+     * @param requestId 请求ID
+     */
+    protected boolean hasRequest(int requestId) {
+        return clientSocketMap.containsKey(requestId);
+    }
+
+    /**
+     * 关闭请求
+     *
+     * @param requestId 请求ID
+     * @param request   请求信息
+     */
+    protected void closeRequest(Integer requestId, T request) {
+        this.removeRequest(requestId);
+        this.closeRequest(request);
+    }
+
+    /**
+     * 关闭请求
+     *
+     * @param request 请求信息
+     */
+    protected abstract void closeRequest(T request);
 
     /**
      * 向内网代理服务器发送数据
      *
-     * @param msgType       消息类型
-     * @param msgId         消息ID
-     * @param clientAddress 客户端地址
-     * @param realData      实际数据
+     * @param msgType   消息类型
+     * @param msgId     消息ID
+     * @param requestId 客户端地址
+     * @param realData  实际数据
      */
-    public abstract void writeData(JRPMsgType msgType, Buffer msgId, String clientAddress, Buffer realData);
+    protected abstract void writeData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer realData);
 }

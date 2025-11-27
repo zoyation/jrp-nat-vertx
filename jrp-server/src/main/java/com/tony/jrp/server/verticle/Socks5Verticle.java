@@ -15,6 +15,7 @@ import io.vertx.core.net.SocketAddress;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -22,7 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * SOCKS5中转服务
  */
 @Slf4j
-public class Socks5Verticle extends AbstractProxyVerticle {
+public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
     // SOCKS5协议版本号
     private static final byte SOCKS5_VERSION = 0x05;
     // 无需认证方法
@@ -35,8 +36,13 @@ public class Socks5Verticle extends AbstractProxyVerticle {
     private static final byte SOCKS5_AUTH_SUCCESS = 0x00;
     // 认证响应第二个字节，认证失败 0x01
     private static final byte SOCKS5_AUTH_FAILURE = 0x01;
+    //命令：0x01=CONNECT，0x02=BIND，0x03=UDP ASSOCIATE
     // CONNECT命令（建立TCP连接）
     private static final byte SOCKS5_CMD_CONNECT = 0x01;
+    // BIND命令，反向连接（FTP等）
+    private static final byte SOCKS5_CMD_BIND = 0x02;
+    //UDP关联命令
+    private static final byte SOCKS5_CMD_UDP_ASSOCIATE = 0x03;
     // IPv4地址类型
     private static final byte SOCKS5_ADDR_TYPE_IPV4 = 0x01;
     // 域名地址类型
@@ -45,12 +51,6 @@ public class Socks5Verticle extends AbstractProxyVerticle {
     private static final byte SOCKS5_REPLY_SUCCEEDED = 0x00;
     // SOCKS5响应：通用失败
     private static final byte SOCKS5_REPLY_GENERAL_FAILURE = 0x01;
-    //UDP关联命令
-    private static final byte SOCKS5_CMD_UDP_ASSOCIATE = 0x03;
-    /**
-     * 用户SOCKS5请求客户端socket
-     */
-    private final Map<String, NetSocket> clientSocks5SocketMap = new ConcurrentHashMap<>();
     /**
      * 在类中添加UDP服务器映射
      */
@@ -68,8 +68,8 @@ public class Socks5Verticle extends AbstractProxyVerticle {
     public Socks5Verticle(ServerWebSocket serverSocket, SecurityService securityService,
                           ClientRegister clientRegister, ClientProxy clientProxy) {
         super(serverSocket, securityService, clientRegister, clientProxy);
-        Integer remotePort = clientProxy.getRemote_port();
-        remotePortByte = ByteBuffer.allocate(4).putInt(remotePort).array();
+        int remotePort = clientProxy.getRemote_port();
+        remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
     }
 
     @Override
@@ -80,91 +80,29 @@ public class Socks5Verticle extends AbstractProxyVerticle {
         options.setIdleTimeout(IDLE_TIMEOUT);
         options.setReceiveBufferSize(BUFFER_SIZE);
         options.setSendBufferSize(BUFFER_SIZE);
-
         server = this.vertx.createNetServer(options);
-
-        // 处理SOCKS5连接请求
-        server.connectHandler(clientSocket -> {
-            clientSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
-            SocketAddress socketAddress = clientSocket.remoteAddress();
+        // 处理SOCKS5连接请求，和基于端口的反向代理转发处理方式不一样：多了握手处理、认证处理（可选），握手和认证处理完后，从SOCKS5请求数据中获取目标服务地址和端口
+        server.connectHandler(netSocket -> {
+            netSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
+            SocketAddress socketAddress = netSocket.remoteAddress();
             log.debug("[{}] SOCKS5客户端连接!", socketAddress.toString());
             String clientAddress = socketAddress.toString();
-            String host = socketAddress.host();
-            Handler<Buffer> handshakeHandler = buffer -> {
-                // SOCKS5握手阶段处理：收到消息VERSION+NMETHODS+METHODS
-                if (buffer.length() < 2) {
-                    log.warn("握手请求报文不正确：{}", clientAddress);
-                    clientSocket.close();
-                    return;
-                }
-                // VERSION：协议版本号，1个字节，socks5为0x05
-                byte version = buffer.getByte(0);
-                if (version != SOCKS5_VERSION) {
-                    log.warn("协议版本号不匹配：{}", clientAddress);
-                    clientSocket.close();
-                    return;
-                }
-                //NMETHODS：客户端支持的认证方法数量，1个字节，1~255
-                int nMethods = buffer.getByte(1) & 0xFF;
-                if (buffer.length() < 2 + nMethods) {
-                    log.warn("支持的认证方法数量不正确：{}", clientAddress);
-                    clientSocket.close();
-                    return;
-                }
-
-                // 检查支持的认证方法
-                byte selectedMethod = (byte) 0xFF; // 默认不支持
-                for (int i = 0; i < nMethods; i++) {
-                    byte method = buffer.getByte(2 + i);
-                    if (method == SOCKS5_AUTH_METHOD_NONE) {
-                        selectedMethod = SOCKS5_AUTH_METHOD_NONE;
-                        break;
-                    } else if (method == SOCKS5_AUTH_METHOD_USERNAME_PASSWORD) {
-                        selectedMethod = SOCKS5_AUTH_METHOD_USERNAME_PASSWORD;
-                        break;
-                    }
-                }
-
-                if (selectedMethod == (byte) 0xFF) {
-                    // 不支持的认证方法
-                    log.warn("认证方法不支持：{}", clientAddress);
-                    clientSocket.write(Buffer.buffer(new byte[]{SOCKS5_VERSION, (byte) 0xFF}));
-                    clientSocket.close();
-                    return;
-                }
-
-                // 发送认证方法选择
-                clientSocket.write(Buffer.buffer(new byte[]{SOCKS5_VERSION, selectedMethod}));
-
-                if (selectedMethod == SOCKS5_AUTH_METHOD_USERNAME_PASSWORD) {
-                    // 切换到用户名密码认证处理阶段
-                    clientSocket.handler(authHandler(clientSocket, clientAddress));
-                } else {
-                    // 无需认证，直接进入请求处理阶段
-                    clientSocket.handler(requestHandler(clientSocket, clientAddress));
-                }
-            };
-
+            // 请求唯一标识
+            int requestId = socketAddress.hashCode();
             // 设置初始握手处理器
-            clientSocket.handler(handshakeHandler);
-
+            netSocket.handler(handshakeHandler(netSocket));
             // 连接关闭处理
-            clientSocket.closeHandler(voidHandler -> {
+            netSocket.closeHandler(voidHandler -> {
                 log.debug("SOCKS5客户端[{}]连接关闭！", clientAddress);
-                if (clientSocks5SocketMap.containsKey(clientAddress)) {
-                    clientSocks5SocketMap.remove(clientAddress);
-                    // 请求唯一标识
-                    Integer requestId = this.getBindRequestId(clientAddress);
-                    if (requestId != null) {
-                        this.release(requestId);
-                        Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
-                                .appendBytes(remotePortByte)
-                                .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
-                        log.debug("SOCKS5客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
-                        serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length())
-                                .appendByte(JRPMsgType.CLOSE.getCode())
-                                .appendBuffer(msgId));
-                    }
+                if (this.hasRequest(requestId)) {
+                    this.closeRequest(requestId, netSocket);
+                    Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
+                            .appendBytes(remotePortByte)
+                            .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
+                    log.debug("SOCKS5客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
+                    serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length())
+                            .appendByte(JRPMsgType.CLOSE.getCode())
+                            .appendBuffer(msgId));
                 }
                 // 清理UDP资源
                 if (udpServerMap.containsKey(clientAddress)) {
@@ -174,7 +112,7 @@ public class Socks5Verticle extends AbstractProxyVerticle {
                 }
             });
 
-            clientSocket.exceptionHandler(err ->
+            netSocket.exceptionHandler(err ->
                     log.error("SOCKS5客户端[{}]异常：{}！", clientAddress, err.getMessage(), err));
         });
 
@@ -188,37 +126,107 @@ public class Socks5Verticle extends AbstractProxyVerticle {
         });
     }
 
+    @Override
+    protected void closeRequest(NetSocket request) {
+        request.close();
+    }
+
     /**
-     * SOCKS5请求处理处理器
+     * 1.处理SOCKS5握手阶段
      *
-     * @param clientSocket  SOCKS5客户端socket
-     * @param clientAddress 客户端地址
+     * @param socket5 SOCKS5客户端socket
+     * @return 处理器
      */
-    private Handler<Buffer> requestHandler(NetSocket clientSocket, String clientAddress) {
+    private Handler<Buffer> handshakeHandler(NetSocket socket5) {
+        SocketAddress remoteAddress = socket5.remoteAddress();
+        return buffer -> {
+            // SOCKS5握手阶段处理：收到消息VERSION+NMETHODS+METHODS
+            if (buffer.length() < 2) {
+                log.warn("握手请求报文不正确：{}", remoteAddress);
+                socket5.close();
+                return;
+            }
+            // VERSION：协议版本号，1个字节，socks5为0x05
+            byte version = buffer.getByte(0);
+            if (version != SOCKS5_VERSION) {
+                log.warn("协议版本号不匹配：{}", remoteAddress);
+                socket5.close();
+                return;
+            }
+            //NMETHODS：客户端支持的认证方法数量，1个字节，1~255
+            int nMethods = buffer.getByte(1) & 0xFF;
+            if (buffer.length() < 2 + nMethods) {
+                log.warn("支持的认证方法数量不正确：{}", remoteAddress);
+                socket5.close();
+                return;
+            }
+            // 检查支持的认证方法
+            byte selectedMethod = (byte) 0xFF; // 默认不支持
+            for (int i = 0; i < nMethods; i++) {
+                byte method = buffer.getByte(2 + i);
+                //优先使用认证
+                if (method == SOCKS5_AUTH_METHOD_USERNAME_PASSWORD) {
+                    selectedMethod = SOCKS5_AUTH_METHOD_USERNAME_PASSWORD;
+                    break;
+                } else if (method == SOCKS5_AUTH_METHOD_NONE) {
+                    selectedMethod = SOCKS5_AUTH_METHOD_NONE;
+                    break;
+                }
+            }
+            if (selectedMethod == (byte) 0xFF) {
+                // 不支持的认证方法
+                log.warn("认证方法不支持：{}", remoteAddress);
+                socket5.write(Buffer.buffer(new byte[]{SOCKS5_VERSION, (byte) 0xFF}));
+                socket5.close();
+                return;
+            }
+            // 发送认证方法选择
+            socket5.write(Buffer.buffer(new byte[]{SOCKS5_VERSION, selectedMethod}));
+            if (selectedMethod == SOCKS5_AUTH_METHOD_USERNAME_PASSWORD) {
+                // 切换到用户名密码认证处理阶段
+                socket5.handler(authHandler(socket5));
+            } else {
+                // 无需认证，直接进入请求处理阶段
+                socket5.handler(requestHandler(socket5));
+            }
+        };
+    }
+
+    /**
+     * 3.SOCKS5请求处理处理器：建立连接，转发数据
+     *
+     * @param clientSocket SOCKS5客户端socket
+     */
+    private Handler<Buffer> requestHandler(NetSocket clientSocket) {
         return buffer -> {
             if (buffer.length() < 7) {
-                sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeSocket(clientAddress, clientSocket));
+                sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                 return;
             }
-
+            //SOCKS版本号：0x05代表SOCKS5
             byte version = buffer.getByte(0);
+            //命令：0x01=CONNECT，0x02=BIND，0x03=UDP ASSOCIATE
+            //0x01（CONNECT）：建立TCP连接（如代理HTTP）。
+            //0x02（BIND）：反向连接（FTP等）。
+            //0x03（UDP ASSOCIATE）：建立UDP代理通道。
             byte cmd = buffer.getByte(1);
+            //目标地址类型：0x01=IPv4，0x03=域名，0x04=IPv6
             byte addrType = buffer.getByte(3);
-
             if (version != SOCKS5_VERSION || (cmd != SOCKS5_CMD_CONNECT && cmd != SOCKS5_CMD_UDP_ASSOCIATE)) {
-                sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeSocket(clientAddress, clientSocket));
+                sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                 return;
             }
-
             try {
+                //目标地址。取决于 ATYP。
                 String targetHost;
+                //目标端口（大端序）
                 int targetPort;
                 int addrLength;
 
                 if (addrType == SOCKS5_ADDR_TYPE_IPV4) {
                     // IPv4地址
                     if (buffer.length() < 10) {
-                        sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeSocket(clientAddress, clientSocket));
+                        sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                         return;
                     }
                     StringBuilder ipBuilder = new StringBuilder();
@@ -233,7 +241,7 @@ public class Socks5Verticle extends AbstractProxyVerticle {
                     // 域名地址
                     int domainLength = buffer.getByte(4) & 0xFF;
                     if (buffer.length() < 7 + domainLength) {
-                        sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeSocket(clientAddress, clientSocket));
+                        sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                         return;
                     }
                     targetHost = buffer.getString(5, 5 + domainLength);
@@ -241,34 +249,34 @@ public class Socks5Verticle extends AbstractProxyVerticle {
                             (buffer.getByte(6 + domainLength) & 0xFF);
                     addrLength = 7 + domainLength;
                 } else {
-                    sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeSocket(clientAddress, clientSocket));
+                    sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                     return;
                 }
 
                 //认证检查
                 if (!securityService.authorized(clientSocket.remoteAddress().host())) {
-                    sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeSocket(clientAddress, clientSocket));
+                    sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                     return;
                 }
-                int requestId = this.newRequestId(clientAddress);
+
                 // 发送成功响应
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_SUCCEEDED);
-                Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
-                        .appendBytes(remotePortByte)
-                        .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
-                // 将SOCKS5客户端加入管理
-                clientSocks5SocketMap.put(clientAddress, clientSocket);
                 if (cmd == SOCKS5_CMD_UDP_ASSOCIATE) {
                     // 处理UDP关联请求
-                    handleUdpAssociate(clientSocket, clientAddress, msgId);
+                    //handleUdpAssociate(clientSocket, clientAddress, msgId);
                     return;
                 }
+                int requestId = clientSocket.hashCode();
+                this.cacheRequest(requestId, clientSocket);
                 // 通知内网代理建立连接
                 Buffer requestData = Buffer.buffer()
                         .appendString(targetHost)
                         .appendByte((byte) ':')
                         .appendInt(targetPort);
-
+                Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
+                        .appendBytes(remotePortByte)
+                        .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
+                // 将SOCKS5客户端加入管理
                 serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + requestData.length())
                         .appendByte(JRPMsgType.RECEIVE.getCode())
                         .appendBuffer(msgId)
@@ -276,7 +284,7 @@ public class Socks5Verticle extends AbstractProxyVerticle {
 
             } catch (Exception e) {
                 log.error("处理SOCKS5请求失败:{}", e.getMessage(), e);
-                sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeSocket(clientAddress, clientSocket));
+                sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
             }
         };
     }
@@ -297,9 +305,9 @@ public class Socks5Verticle extends AbstractProxyVerticle {
     }
 
     /**
-     * 用户名密码认证处理器
+     * 2.用户名密码认证处理器
      */
-    private Handler<Buffer> authHandler(NetSocket clientSocket, String clientAddress) {
+    private Handler<Buffer> authHandler(NetSocket clientSocket) {
         return buffer -> {
             if (buffer.length() < 3) {
                 clientSocket.close();
@@ -337,7 +345,7 @@ public class Socks5Verticle extends AbstractProxyVerticle {
                 // 发送成功响应
                 sendAuthReply(clientSocket, SOCKS5_AUTH_SUCCESS);
                 // 成功后请求处理
-                clientSocket.handler(requestHandler(clientSocket, clientAddress));
+                clientSocket.handler(requestHandler(clientSocket));
             } else {
                 // 发送失败响应
                 sendAuthReply(clientSocket, SOCKS5_AUTH_FAILURE);
@@ -435,12 +443,13 @@ public class Socks5Verticle extends AbstractProxyVerticle {
     }
 
     @Override
-    public void writeData(JRPMsgType msgType, Buffer msgId, String clientAddress, Buffer realData) {
-        NetSocket clientNetSocket = clientSocks5SocketMap.get(clientAddress);
+    public void writeData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer realData) {
+        NetSocket clientNetSocket = this.getRequest(requestId);
         if (clientNetSocket != null) {
+            String clientAddress = clientNetSocket.remoteAddress().toString();
             if (JRPMsgType.CLOSE == msgType) {
                 log.debug("收到内网代理服务返回的关闭信息[{}]，关闭SOCKS5连接。", clientAddress);
-                closeSocket(clientAddress, clientNetSocket);
+                this.closeRequest(requestId, clientNetSocket);
             } else if (JRPMsgType.RESPONSE == msgType) {
                 log.debug("收到内网代理服务返回数据并返回给SOCKS5客户端[{}]。", clientAddress);
                 clientNetSocket.write(realData);
@@ -452,37 +461,26 @@ public class Socks5Verticle extends AbstractProxyVerticle {
                 log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", clientAddress, msgType);
             }
         } else if (JRPMsgType.CLOSE == msgType) {
-            log.warn("收到内网代理服务返回的关闭消息，SOCKS5客户端[{}]连接已经失效，不做处理！", clientAddress);
+            log.warn("收到内网代理服务返回的关闭消息，SOCKS5客户端[{}]连接已经失效，不做处理！", requestId);
         } else {
-            log.warn("收到内网代理服务返回消息，但是SOCKS5客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", clientAddress);
+            log.warn("收到内网代理服务返回消息，但是SOCKS5客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", requestId);
             serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length())
                     .appendByte(JRPMsgType.CLOSE.getCode())
                     .appendBuffer(msgId));
         }
     }
 
-    /**
-     * 关闭SOCKS5连接
-     */
-    private void closeSocket(String clientAddress, NetSocket clientNetSocket) {
-        clientSocks5SocketMap.remove(clientAddress);
-        Integer requestId = this.getBindRequestId(clientAddress);
-        if (requestId != null) {
-            this.release(requestId);
-        }
-        clientNetSocket.close();
-    }
 
     @Override
     public void stop() throws Exception {
         log.info("清理端口[{}]下SOCKS5代理和缓存！", clientProxy.getRemote_port());
-        clientSocks5SocketMap.values().forEach(NetSocket::close);
+        //clientSocketMap.values().forEach(NetSocket::close);
         // 关闭所有UDP服务器
         udpServerMap.values().forEach(NetServer::close);
         udpServerMap.clear();
 
         server.close();
-        clientSocks5SocketMap.clear();
+        //clientSocketMap.clear();
         super.stop();
     }
 }

@@ -48,6 +48,14 @@ public class ProxyClientManager implements InitializingBean {
     public static final int IDLE_TIMEOUT = 10;
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    /**
+     * 消息类型和端口byte长度
+     */
+    public static final int TYPE_PORT_LEN = JRPMsgType.TYPE_LEN + 2;
+    /**
+     * 消息类型、端口和请求id byte长度
+     */
+    public static final int TYPE_PORT_REQUEST_ID_LEN = JRPMsgType.TYPE_LEN + 2 + 4;
     @Autowired
     protected Vertx vertx;
     @Autowired
@@ -75,16 +83,16 @@ public class ProxyClientManager implements InitializingBean {
     /**
      * TCP代理处理器
      */
-    private AbstractProxyHandler tcpProxyHandler;
+    private AbstractProxyHandler tcpProxyHandler = null;
     /**
      * UDP代理处理器
      */
-    private AbstractProxyHandler udpProxyHandler;
+    private AbstractProxyHandler udpProxyHandler = null;
 
     /**
      * http正向代理穿透处理器
      */
-    private AbstractProxyHandler httpForwardHandler;
+    private AbstractProxyHandler httpForwardHandler = null;
 
     @Data
     private static class RegisterStatus {
@@ -113,7 +121,6 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     public void init() throws IOException {
-        this.closeAndCreateProxyHandler();
         String registerAddress = properties.getRegisterAddress();
         //使用lastIndexOf支持ipv6地址解析。
         int lastIndex = registerAddress.lastIndexOf(":");
@@ -143,6 +150,13 @@ public class ProxyClientManager implements InitializingBean {
      * 创建代理处理器
      */
     private void closeAndCreateProxyHandler() throws IOException {
+        closeProxySocket();
+        tcpProxyHandler = new TcpReverseProxyHandler(vertx);
+        udpProxyHandler = new UdpReverseProxyHandler(vertx);
+        httpForwardHandler = new HttpForwardProxyHandler(vertx);
+    }
+
+    private void closeProxySocket() throws IOException {
         if (tcpProxyHandler != null) {
             log.info("停止TCP穿透转发服务");
             tcpProxyHandler.close();
@@ -155,9 +169,6 @@ public class ProxyClientManager implements InitializingBean {
             log.info("停止http正向代理穿透转发服务");
             httpForwardHandler.close();
         }
-        tcpProxyHandler = new TcpReverseProxyHandler(vertx);
-        udpProxyHandler = new UdpReverseProxyHandler(vertx);
-        httpForwardHandler = new HttpForwardProxyHandler(vertx);
     }
 
     private HttpServer startServer(ProxyClientConfig newConfig) {
@@ -248,7 +259,7 @@ public class ProxyClientManager implements InitializingBean {
                     registerProxies.addAll(remoteProxies);
                 }
                 register.setProxies(registerProxies);
-                Map<String, ClientProxy> remotePortClientMap = registerProxies.stream().collect(Collectors.toMap(r -> r.getRemote_port().toString(), r -> r));
+                Map<Integer, ClientProxy> remotePortClientMap = registerProxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r));
                 log.info("开始注册...");
                 vertx.executeBlocking(() -> tryRegister(register, remotePortClientMap)).onComplete(result -> {
                     if (registerSchedule != null) {
@@ -282,7 +293,7 @@ public class ProxyClientManager implements InitializingBean {
      * @param register            穿透注册信息
      * @param remotePortClientMap 穿透注册信息map
      */
-    private Boolean tryRegister(ClientRegister register, Map<String, ClientProxy> remotePortClientMap) {
+    private Boolean tryRegister(ClientRegister register, Map<Integer, ClientProxy> remotePortClientMap) {
         AtomicReference<Boolean> result = new AtomicReference<>(false);
         if (registerWebSocket == null) {
             synchronized (ProxyClientManager.this) {
@@ -315,6 +326,7 @@ public class ProxyClientManager implements InitializingBean {
                                             if (registerResult.isSuccess()) {
                                                 result.set(true);
                                                 log.info("注册成功：\r\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
+                                                this.closeAndCreateProxyHandler();
                                                 for (ClientProxy proxy : register.getProxies()) {
                                                     if (proxy.getType() != null) {
                                                         //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
@@ -326,31 +338,31 @@ public class ProxyClientManager implements InitializingBean {
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case HTTPS:
-                                                                message = "HTTPS服务[{%s}]穿透后外网地址：[https://{%s}:{%s}]！";
+                                                                message = "HTTPS服务[{%s}]穿透后外网地址：[https://%s:%s]！";
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case TCP:
-                                                                message = "TCP服务[{%s}]穿透后外网地址：[{%s}:{%s}]！";
+                                                                message = "TCP服务[{%s}]穿透后外网地址：[%s:%s]！";
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case UDP:
-                                                                message = "UDP服务[{%s}]穿透后外网地址：[{%s}:{%s}]！";
+                                                                message = "UDP服务[{%s}]穿透后外网地址：[%s:%s]！";
                                                                 logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case HTTP_PROXY:
-                                                                message = "HTTP代理服务穿透后外网地址：[http://{%s}:{%s}]！";
+                                                                message = "HTTP代理服务穿透后外网地址：[http://%s:%s]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case HTTPS_PROXY:
-                                                                message = "HTTPS代理服务穿透后外网地址：[https://{%s}:{%s}]！";
+                                                                message = "HTTPS代理服务穿透后外网地址：[https://%s:%s]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case SOCKS4:
-                                                                message = "SOCKS4代理服务穿透后外网地址：[{%s}:{%s}]！";
+                                                                message = "SOCKS4代理服务穿透后外网地址：[%s:%s]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                             case SOCKS5:
-                                                                message = "SOCKS5代理服务穿透后外网地址：[{%s}:{%s}]！";
+                                                                message = "SOCKS5代理服务穿透后外网地址：[%s:%s]！";
                                                                 logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                                 break;
                                                         }
@@ -390,13 +402,13 @@ public class ProxyClientManager implements InitializingBean {
                                     case CLOSE:
                                     case RECEIVE:
                                         //代理端口
-                                        Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + 4).getInt(0);
-                                        //请求唯一标识
-                                        Integer requestId = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1 + 4, JRPMsgType.TYPE_LEN + 1 + 4 + 4).getInt(0);
-                                        //获取消息标识：代理端口+请求id
-                                        Buffer msgId = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1, JRPMsgType.TYPE_LEN + 1 + 4 + 4);
+                                        Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_LEN).getUnsignedShort(0);
+                                        //请求唯一标识,代理端口之后开始取
+                                        Integer requestId = buffer.getBuffer(TYPE_PORT_LEN, TYPE_PORT_REQUEST_ID_LEN).getInt(0);
+                                        //获取消息标识：代理端口+请求id，消息类型之后取
+                                        Buffer msgId = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_REQUEST_ID_LEN);
                                         //收到外网穿透服务器发送的客户端请求通知
-                                        Buffer data = buffer.getBuffer(JRPMsgType.TYPE_LEN + 1 + 4 + 4, buffer.length());
+                                        Buffer data = buffer.getBuffer(TYPE_PORT_REQUEST_ID_LEN, buffer.length());
                                         log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", requestId);
                                         ClientProxy proxy = remotePortClientMap.get(remotePort);
                                         switch (proxy.getType()) {
@@ -432,11 +444,11 @@ public class ProxyClientManager implements InitializingBean {
                                 }
                                 closeSocket(true);
                             });
-                            String registerInfo = Json.encode(register);
-                            log.info("开始发送注册消息：\r\n{}", register);
+                            String registerInfo = Json.encodePrettily(register);
+                            log.info("开始发送注册消息：\r\n{}", registerInfo);
                             webSocket.write(Buffer.buffer(JRPMsgType.REGISTER.codeArray()).appendBuffer(Buffer.buffer(registerInfo))).onComplete((rt) -> {
                                 if (rt.succeeded()) {
-                                    log.info("发送注册消息成功，等待返回，注册消息为：\r\n{}", register);
+                                    log.info("发送注册消息成功，等待返回!");
                                 } else {
                                     errorMessage = rt.cause().getMessage();
                                     log.info("发送注册消息失败，error：{}", rt.cause().getMessage(), rt.cause());
@@ -500,7 +512,7 @@ public class ProxyClientManager implements InitializingBean {
                 vertx.cancelTimer(pingTimerId);
                 pingTimerId = null;
             }
-            this.closeAndCreateProxyHandler();
+            this.closeProxySocket();
 //            if (!netSocketMap.isEmpty()) {
 //                log.info("停止TCP转发服务");
 //                netSocketMap.values().forEach(NetSocket::close);
