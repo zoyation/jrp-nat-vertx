@@ -1,6 +1,7 @@
 package com.tony.jrp.client.handler;
 
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramSocket;
@@ -63,16 +64,15 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, String proxyPass, Buffer data) {
+    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
         int originPort;
         String originHost;
-        String[] ipPort = proxyPass.split(":");
+        String[] ipPort = clientProxy.getProxy_pass().split(":");
         originHost = ipPort[0];
         originPort = Integer.parseInt(ipPort[1]);
         final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
         DatagramSocket netSocket = datagramSocketMap.get(clientId);
         if (netSocket != null) {
-            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
             sendUdpData(clientId, data, netSocket, originPort, originHost);
         } else {
             synchronized (datagramSocketMap) {

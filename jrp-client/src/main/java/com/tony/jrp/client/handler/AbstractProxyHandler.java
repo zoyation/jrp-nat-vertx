@@ -1,6 +1,7 @@
 package com.tony.jrp.client.handler;
 
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.WebSocket;
@@ -30,7 +31,7 @@ public abstract class AbstractProxyHandler implements Closeable {
      * @param proxyPass         代理信息
      * @param data              数据
      */
-    public void handle(WebSocket registerWebSocket, byte msgType, Buffer msgId, Integer clientId, String proxyPass, Buffer data) {
+    public void handle(WebSocket registerWebSocket, byte msgType, Buffer msgId, Integer clientId, ClientProxy proxyPass, Buffer data) {
         log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", clientId);
         try {
             if (msgType == JRPMsgType.CLOSE.getCode()) {
@@ -71,11 +72,11 @@ public abstract class AbstractProxyHandler implements Closeable {
     /**
      * 接受消息，发请求到内网服务并返回结果
      *
-     * @param webSocket 中转连接
-     * @param msgId     消息id
-     * @param clientId  请求唯一标识（IP+端口）
-     * @param proxyPass 代理配置信息
-     * @param data      数据
+     * @param webSocket   中转连接
+     * @param msgId       消息id
+     * @param clientId    请求唯一标识（IP+端口）
+     * @param clientProxy 代理配置信息
+     * @param data        数据
      */
-    protected abstract void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, String proxyPass, Buffer data);
+    protected abstract void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data);
 }

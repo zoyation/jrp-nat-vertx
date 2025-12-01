@@ -1,6 +1,7 @@
 package com.tony.jrp.server.verticle;
 
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.enums.SocksProxyProto;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.server.service.impl.SecurityService;
@@ -23,7 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * SOCKS5中转服务
  */
 @Slf4j
-public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
+public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
     // SOCKS5协议版本号
     private static final byte SOCKS5_VERSION = 0x05;
     // 无需认证方法
@@ -65,8 +66,8 @@ public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
     private NetServer server;
     byte[] remotePortByte;
 
-    public Socks5Verticle(ServerWebSocket serverSocket, SecurityService securityService,
-                          ClientRegister clientRegister, ClientProxy clientProxy) {
+    public SocksVerticle(ServerWebSocket serverSocket, SecurityService securityService,
+                         ClientRegister clientRegister, ClientProxy clientProxy) {
         super(serverSocket, securityService, clientRegister, clientProxy);
         int remotePort = clientProxy.getRemote_port();
         remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
@@ -187,7 +188,7 @@ public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
                 socket5.handler(authHandler(socket5));
             } else {
                 // 无需认证，直接进入请求处理阶段
-                socket5.handler(requestHandler(socket5));
+                socket5.handler(requestHandler(false, socket5));
             }
         };
     }
@@ -195,9 +196,10 @@ public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
     /**
      * 3.SOCKS5请求处理处理器：建立连接，转发数据
      *
+     * @param needAuth     是否需要认证
      * @param clientSocket SOCKS5客户端socket
      */
-    private Handler<Buffer> requestHandler(NetSocket clientSocket) {
+    private Handler<Buffer> requestHandler(boolean needAuth, NetSocket clientSocket) {
         return buffer -> {
             if (buffer.length() < 7) {
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
@@ -213,6 +215,7 @@ public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
             //目标地址类型：0x01=IPv4，0x03=域名，0x04=IPv6
             byte addrType = buffer.getByte(3);
             if (version != SOCKS5_VERSION || (cmd != SOCKS5_CMD_CONNECT && cmd != SOCKS5_CMD_UDP_ASSOCIATE)) {
+                log.warn("SOCKS5请求报文不支持：{}", clientSocket.remoteAddress());
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                 return;
             }
@@ -254,38 +257,50 @@ public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
                 }
 
                 //认证检查
-                if (!securityService.authorized(clientSocket.remoteAddress().host())) {
+                if (needAuth && !securityService.authorized(clientSocket.remoteAddress().host())) {
                     sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                     return;
                 }
-
-                // 发送成功响应
-                sendSocks5Reply(clientSocket, SOCKS5_REPLY_SUCCEEDED);
                 if (cmd == SOCKS5_CMD_UDP_ASSOCIATE) {
                     // 处理UDP关联请求
                     //handleUdpAssociate(clientSocket, clientAddress, msgId);
                     return;
                 }
                 int requestId = clientSocket.hashCode();
-                this.cacheRequest(requestId, clientSocket);
+
                 // 通知内网代理建立连接
-                Buffer requestData = Buffer.buffer()
+                Buffer target = Buffer.buffer()
+                        .appendString(SocksProxyProto.TCP.name() + ":")
                         .appendString(targetHost)
                         .appendByte((byte) ':')
                         .appendInt(targetPort);
                 Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
                         .appendBytes(remotePortByte)
                         .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
+                this.cacheRequest(requestId, clientSocket);
                 // 将SOCKS5客户端加入管理
-                serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + requestData.length())
+                serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
                         .appendByte(JRPMsgType.RECEIVE.getCode())
                         .appendBuffer(msgId)
-                        .appendBuffer(requestData));
+                        .appendBuffer(target));
 
             } catch (Exception e) {
                 log.error("处理SOCKS5请求失败:{}", e.getMessage(), e);
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
             }
+        };
+    }
+
+    /**
+     * 数据处理器：接收和转发数据
+     */
+    private Handler<Buffer> dataHandler(Buffer msgId) {
+        return buffer -> {
+            // 将SOCKS5客户端加入管理
+            serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + buffer.length())
+                    .appendByte(JRPMsgType.RECEIVE.getCode())
+                    .appendBuffer(msgId)
+                    .appendBuffer(buffer));
         };
     }
 
@@ -345,7 +360,7 @@ public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
                 // 发送成功响应
                 sendAuthReply(clientSocket, SOCKS5_AUTH_SUCCESS);
                 // 成功后请求处理
-                clientSocket.handler(requestHandler(clientSocket));
+                clientSocket.handler(requestHandler(true, clientSocket));
             } else {
                 // 发送失败响应
                 sendAuthReply(clientSocket, SOCKS5_AUTH_FAILURE);
@@ -452,10 +467,18 @@ public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
                 this.closeRequest(requestId, clientNetSocket);
             } else if (JRPMsgType.RESPONSE == msgType) {
                 log.debug("收到内网代理服务返回数据并返回给SOCKS5客户端[{}]。", clientAddress);
-                clientNetSocket.write(realData);
-                if (clientNetSocket.writeQueueFull()) {
-                    clientNetSocket.pause();
-                    clientNetSocket.drainHandler(done -> clientNetSocket.resume());
+                //判断是否为创建TCP连接成功返回消息
+                if (realData.length() == 0) {
+                    //接收和转发数据
+                    clientNetSocket.handler(dataHandler(msgId));
+                    // 发送成功响应
+                    sendSocks5Reply(clientNetSocket, SOCKS5_REPLY_SUCCEEDED);
+                } else {
+                    clientNetSocket.write(realData);
+                    if (clientNetSocket.writeQueueFull()) {
+                        clientNetSocket.pause();
+                        clientNetSocket.drainHandler(done -> clientNetSocket.resume());
+                    }
                 }
             } else {
                 log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", clientAddress, msgType);

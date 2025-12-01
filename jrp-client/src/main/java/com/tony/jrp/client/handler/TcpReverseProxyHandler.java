@@ -2,6 +2,7 @@ package com.tony.jrp.client.handler;
 
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.enums.ServiceType;
+import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.WebSocket;
@@ -47,7 +48,8 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, String proxyPass, Buffer data) {
+    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
+        String proxyPass = clientProxy.getProxy_pass();
         int originPort;
         String originHost;
         boolean https;
@@ -67,7 +69,6 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
         final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
         NetSocket netSocket = netSocketMap.get(clientId);
         if (netSocket != null) {
-            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
             sendTcpData(originHost, proxyPass, data, netSocket);
         } else {
             synchronized (netSocketMap) {

@@ -113,6 +113,8 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
                 }
                 case SOCKS4:
                 case SOCKS5:
+                    verticle = new SocksVerticle(serverSocket, securityService, clientRegister, clientProxy);
+                    break;
                 default:
                     throw new Exception("不支持代理类型：" + clientProxy.getType().name() + "！");
             }

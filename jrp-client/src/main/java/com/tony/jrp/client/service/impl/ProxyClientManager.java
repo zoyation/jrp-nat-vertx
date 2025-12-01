@@ -2,10 +2,7 @@ package com.tony.jrp.client.service.impl;
 
 import com.tony.jrp.client.config.ProxyClientConfig;
 import com.tony.jrp.client.config.ProxyClientProperties;
-import com.tony.jrp.client.handler.AbstractProxyHandler;
-import com.tony.jrp.client.handler.HttpForwardProxyHandler;
-import com.tony.jrp.client.handler.TcpReverseProxyHandler;
-import com.tony.jrp.client.handler.UdpReverseProxyHandler;
+import com.tony.jrp.client.handler.*;
 import com.tony.jrp.client.service.IConfigService;
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.ClientProxy;
@@ -93,6 +90,10 @@ public class ProxyClientManager implements InitializingBean {
      * http正向代理穿透处理器
      */
     private AbstractProxyHandler httpForwardHandler = null;
+    /**
+     * socks4/5正向代理穿透处理器
+     */
+    private AbstractProxyHandler socksProxyHandler = null;
 
     @Data
     private static class RegisterStatus {
@@ -154,6 +155,7 @@ public class ProxyClientManager implements InitializingBean {
         tcpProxyHandler = new TcpReverseProxyHandler(vertx);
         udpProxyHandler = new UdpReverseProxyHandler(vertx);
         httpForwardHandler = new HttpForwardProxyHandler(vertx);
+        socksProxyHandler = new SocksProxyHandler(vertx);
     }
 
     private void closeProxySocket() throws IOException {
@@ -168,6 +170,10 @@ public class ProxyClientManager implements InitializingBean {
         if (httpForwardHandler != null) {
             log.info("停止http正向代理穿透转发服务");
             httpForwardHandler.close();
+        }
+        if (socksProxyHandler != null) {
+            log.info("停止socks正向代理穿透转发服务");
+            socksProxyHandler.close();
         }
     }
 
@@ -415,17 +421,18 @@ public class ProxyClientManager implements InitializingBean {
                                             case HTTP:
                                             case HTTPS:
                                             case TCP:
-                                                tcpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy.getProxy_pass(), data);
+                                                tcpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
                                                 break;
                                             case UDP:
-                                                udpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy.getProxy_pass(), data);
+                                                udpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
                                                 break;
                                             case HTTP_PROXY:
                                             case HTTPS_PROXY:
-                                                httpForwardHandler.handle(webSocket, msgType, msgId, requestId, proxy.getProxy_pass(), data);
+                                                httpForwardHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
                                                 break;
                                             case SOCKS4:
                                             case SOCKS5:
+                                                socksProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
                                                 break;
                                         }
                                 }

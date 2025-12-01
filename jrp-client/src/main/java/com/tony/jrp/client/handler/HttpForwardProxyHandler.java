@@ -1,6 +1,7 @@
 package com.tony.jrp.client.handler;
 
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.WebSocket;
@@ -47,13 +48,12 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, String proxyPass, Buffer data) {
+    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
         if (data.toString().contains("connection: upgrade")) {
             log.debug("connection: upgrade:{}", data);
         }
         NetSocket netSocket = netSocketMap.get(clientId);
         if (netSocket != null) {
-            //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
             sendTcpData(null, null, data, netSocket);
         } else {
             synchronized (netSocketMap) {
@@ -144,7 +144,7 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
                                         });
                                         //转发返回消息到内网真实服务器
                                         if (receiveData.length() > 0) {
-                                            sendTcpData(originHost, proxyPass, receiveData, proxySocket);
+                                            sendTcpData(originHost, clientProxy.getProxy_pass(), receiveData, proxySocket);
                                         }
                                         log.info("内网代理连接到{}:{}成功！", originHost, socketAddress.port());
                                     } else {
