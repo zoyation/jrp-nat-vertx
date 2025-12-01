@@ -22,8 +22,6 @@ import java.util.concurrent.CountDownLatch;
  */
 @Slf4j
 public class SocksProxyHandler extends AbstractProxyHandler {
-    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
-    public static final int WRITE_QUEUE_MAX_SIZE = 100;
     /**
      * 代理请求对象缓存
      */
@@ -108,7 +106,7 @@ public class SocksProxyHandler extends AbstractProxyHandler {
                     clientOptions.setReceiveBufferSize(BUFFER_SIZE);
                     clientOptions.setSendBufferSize(BUFFER_SIZE);
                     clientOptions.setTrustAll(true);
-                    clientOptions.setConnectTimeout(200);
+                    clientOptions.setConnectTimeout(CONNECT_TIMEOUT);
                     NetClient netClient = vertx.createNetClient(clientOptions);
                     netClient.connect(socketAddress, asyncResult -> {
                         try {

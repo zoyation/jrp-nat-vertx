@@ -24,8 +24,7 @@ import java.util.concurrent.CountDownLatch;
  */
 @Slf4j
 public class HttpForwardProxyHandler extends AbstractProxyHandler {
-    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
-    public static final int WRITE_QUEUE_MAX_SIZE = 100;
+
     /**
      * 代理请求对象缓存
      */
@@ -114,6 +113,7 @@ public class HttpForwardProxyHandler extends AbstractProxyHandler {
                             NetClientOptions clientOptions = new NetClientOptions();
                             clientOptions.setReceiveBufferSize(BUFFER_SIZE);
                             clientOptions.setSendBufferSize(BUFFER_SIZE);
+                            clientOptions.setConnectTimeout(CONNECT_TIMEOUT);
                             if (https) {
                                 clientOptions.setSsl(true);
                                 clientOptions.setTrustAll(true);

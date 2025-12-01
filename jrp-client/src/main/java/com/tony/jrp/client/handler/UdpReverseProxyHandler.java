@@ -21,7 +21,6 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 public class UdpReverseProxyHandler extends AbstractProxyHandler {
-    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     /**
      * udp缓存
      */
@@ -113,7 +112,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
                         downLatch.countDown();
                     });
                     try {
-                        boolean await = downLatch.await(1, TimeUnit.SECONDS);
+                        boolean await = downLatch.await(CONNECT_TIMEOUT, TimeUnit.MILLISECONDS);
                         if (!await) {
                             log.error("udp转发连接超时，删除缓存");
                             datagramSocketMap.remove(clientId);

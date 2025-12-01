@@ -14,6 +14,9 @@ import java.io.Closeable;
  */
 @Slf4j
 public abstract class AbstractProxyHandler implements Closeable {
+    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
+    public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    public static final int CONNECT_TIMEOUT = 200;
     public static final int TYPE_AND_MSG_ID_BYTE_SIZE = 9;
     protected Vertx vertx;
 
