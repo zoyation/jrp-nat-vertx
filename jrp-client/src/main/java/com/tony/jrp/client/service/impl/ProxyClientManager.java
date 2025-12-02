@@ -155,7 +155,7 @@ public class ProxyClientManager implements InitializingBean {
         tcpProxyHandler = new TcpReverseProxyHandler(vertx);
         udpProxyHandler = new UdpReverseProxyHandler(vertx);
         httpForwardHandler = new HttpForwardProxyHandler(vertx);
-        socksProxyHandler = new SocksProxyHandler(vertx);
+        socksProxyHandler = new Socks5ProxyHandler(vertx);
     }
 
     private void closeProxySocket() throws IOException {

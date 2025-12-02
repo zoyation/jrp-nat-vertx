@@ -21,7 +21,7 @@ import java.util.concurrent.CountDownLatch;
  * sockets消息处理器
  */
 @Slf4j
-public class SocksProxyHandler extends AbstractProxyHandler {
+public class Socks5ProxyHandler extends AbstractProxyHandler {
     /**
      * 代理请求对象缓存
      */
@@ -63,7 +63,7 @@ public class SocksProxyHandler extends AbstractProxyHandler {
         }
     }
 
-    public SocksProxyHandler(Vertx vertx) {
+    public Socks5ProxyHandler(Vertx vertx) {
         super(vertx);
     }
 
@@ -85,13 +85,13 @@ public class SocksProxyHandler extends AbstractProxyHandler {
         NetSocket netSocket = netSocketMap.get(clientId);
         TargetInfo targetInfo = targetMap.get(clientId);
         if (netSocket != null && targetInfo != null) {
-            sendTcpData(targetInfo.getHost(), targetInfo.getProxyPass(), data, netSocket);
+            sendTcpData(data, netSocket);
         } else {
             synchronized (netSocketMap) {
                 netSocket = netSocketMap.get(clientId);
                 targetInfo = targetMap.get(clientId);
                 if (netSocket != null && targetInfo != null) {
-                    sendTcpData(targetInfo.getHost(), targetInfo.getProxyPass(), data, netSocket);
+                    sendTcpData(data, netSocket);
                 } else {
                     //首次创建TCP连接，格式：TCP:IP:PORT
                     String connectStr = data.toString();
@@ -123,19 +123,22 @@ public class SocksProxyHandler extends AbstractProxyHandler {
                                         webSocket.write(closeBuffer(msgId));
                                     }
                                 });
-                                proxySocket.handler(response -> {
-                                    if (webSocket != null && netSocketMap.get(clientId) != null) {
-                                        log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
-                                        webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + response.length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(response));
-                                    } else {
-                                        log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
-                                    }
-                                });
                                 // 返回给服务端代表连接成功
-                                webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
-                                log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
+                                if (webSocket != null) {
+                                    proxySocket.handler(response -> {
+                                        if (netSocketMap.get(clientId) != null) {
+                                            log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
+                                            webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + response.length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(response));
+                                        } else {
+                                            log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
+                                        }
+                                    });
+                                    webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
+                                    log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
+                                }
                             } else {
                                 log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());
+                                webSocket.write(closeBuffer(msgId));
                             }
                         } catch (Exception e) {
                             log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);
@@ -158,18 +161,11 @@ public class SocksProxyHandler extends AbstractProxyHandler {
     /**
      * 发送TCP数据
      *
-     * @param originHost 原始服务主机
-     * @param proxyPass  代理服务地址
-     * @param data       数据
-     * @param netSocket  数据发送对象
+     * @param data      数据
+     * @param netSocket 数据发送对象
      */
-    private static void sendTcpData(String originHost, String proxyPass, Buffer data, NetSocket netSocket) {
-        if (data.toString().contains("Host:")) {
-            //替换Host和Referer值，避免被内网服务器拦截，尤其是跨域请求
-            netSocket.write(Buffer.buffer(data.toString().replaceAll("Host: .*", "Host: " + originHost).replaceAll("Referer:.*", "referer: " + proxyPass)));
-        } else {
-            netSocket.write(data);
-        }
+    private static void sendTcpData(Buffer data, NetSocket netSocket) {
+        netSocket.write(data);
         if (netSocket.writeQueueFull()) {
             netSocket.pause();
             netSocket.drainHandler((done) -> netSocket.resume());

@@ -196,6 +196,24 @@ public class SecurityService implements InitializingBean {
     }
 
     /**
+     * 返回增强型HTTPS认证报文
+     *
+     * @param host 主机名称、IP
+     * @return 认证报文
+     */
+    public String getAuthenticateResponseHttps(String host) {
+        return "HTTP/1.1 401 Unauthorized\r\n" +
+                "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
+                "Pragma: no-cache\r\n" +
+                "Expires: 0\r\n" +
+                "WWW-Authenticate: " + getWWWAuthenticate(host) + "\r\n" +
+                "Content-Type: text/html\r\n" +
+                "Connection: close\r\n" +
+                "\r\n" +
+                "<html><body><h1>401 Unauthorized</h1><p>Authentication required.</p></body></html>";
+    }
+
+    /**
      * 返回TCP认证报文
      *
      * @param host 主机名称、IP
@@ -333,6 +351,53 @@ public class SecurityService implements InitializingBean {
             result = httpMethods.stream().anyMatch(r -> method.toString().startsWith(r));
         }
         return result;
+    }
+
+    /**
+     * 扩展安全服务中的判断逻辑
+     *
+     * @param data       请求数据
+     * @param targetPort 目标端口
+     * @return 是否为HTTPS请求
+     */
+    public boolean isHttps(Buffer data, int targetPort) {
+        // 首先检查是否为HTTP CONNECT请求
+        if (this.isHTTPRequest(data)) {
+            String dataStr = data.toString();
+            if (dataStr.startsWith("CONNECT ")) {
+                return true; // HTTPS CONNECT请求
+            }
+            return false; // HTTP请求
+        }
+        // 检查TLS握手特征
+        if (data.length() >= 1 && data.getByte(0) == 0x16) {
+            return true; // TLS握手包
+        }
+        // 根据端口判断
+        return targetPort == 443 || targetPort == 8443; // 可能是HTTPS端口
+    }
+
+    /**
+     * 扩展安全服务中的判断逻辑
+     *
+     * @param data       请求数据
+     * @param targetPort 目标端口
+     */
+    public boolean isSecureRequest(Buffer data, int targetPort) {
+        // 首先检查是否为HTTP CONNECT请求
+        if (this.isHTTPRequest(data)) {
+            String dataStr = data.toString();
+            if (dataStr.startsWith("CONNECT ")) {
+                return true; // HTTPS CONNECT请求
+            }
+            return true; // HTTP请求
+        }
+        // 检查TLS握手特征
+        if (data.length() >= 1 && data.getByte(0) == 0x16) {
+            return true; // TLS握手包
+        }
+        // 根据端口判断
+        return targetPort == 443 || targetPort == 8443; // 可能是HTTPS端口
     }
 
     /**

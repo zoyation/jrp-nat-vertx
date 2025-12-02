@@ -19,12 +19,13 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * SOCKS5中转服务
  */
 @Slf4j
-public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
+public class Socks5Verticle extends AbstractProxyVerticle<NetSocket> {
     // SOCKS5协议版本号
     private static final byte SOCKS5_VERSION = 0x05;
     // 无需认证方法
@@ -40,7 +41,7 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
     //命令：0x01=CONNECT，0x02=BIND，0x03=UDP ASSOCIATE
     // CONNECT命令（建立TCP连接）
     private static final byte SOCKS5_CMD_CONNECT = 0x01;
-    // BIND命令，反向连接（FTP等）
+    // BIND命令，反向连接（FTP等），不支持
     private static final byte SOCKS5_CMD_BIND = 0x02;
     //UDP关联命令
     private static final byte SOCKS5_CMD_UDP_ASSOCIATE = 0x03;
@@ -66,8 +67,8 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
     private NetServer server;
     byte[] remotePortByte;
 
-    public SocksVerticle(ServerWebSocket serverSocket, SecurityService securityService,
-                         ClientRegister clientRegister, ClientProxy clientProxy) {
+    public Socks5Verticle(ServerWebSocket serverSocket, SecurityService securityService,
+                          ClientRegister clientRegister, ClientProxy clientProxy) {
         super(serverSocket, securityService, clientRegister, clientProxy);
         int remotePort = clientProxy.getRemote_port();
         remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
@@ -187,19 +188,19 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
                 // 切换到用户名密码认证处理阶段
                 socket5.handler(authHandler(socket5));
             } else {
-                // 无需认证，直接进入请求处理阶段
+                // 无需认证，尝试和内网建立连接
                 socket5.handler(requestHandler(false, socket5));
             }
         };
     }
 
     /**
-     * 3.SOCKS5请求处理处理器：建立连接，转发数据
+     * 3.SOCKS5请求处理处理器：尝试和内网建立连接
      *
-     * @param needAuth     是否需要认证
+     * @param socksAuth    socks5是否需要用户名密码认证
      * @param clientSocket SOCKS5客户端socket
      */
-    private Handler<Buffer> requestHandler(boolean needAuth, NetSocket clientSocket) {
+    private Handler<Buffer> requestHandler(boolean socksAuth, NetSocket clientSocket) {
         return buffer -> {
             if (buffer.length() < 7) {
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
@@ -207,15 +208,19 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
             }
             //SOCKS版本号：0x05代表SOCKS5
             byte version = buffer.getByte(0);
-            //命令：0x01=CONNECT，0x02=BIND，0x03=UDP ASSOCIATE
-            //0x01（CONNECT）：建立TCP连接（如代理HTTP）。
-            //0x02（BIND）：反向连接（FTP等）。
-            //0x03（UDP ASSOCIATE）：建立UDP代理通道。
+            /*
+            命令：0x01=CONNECT，0x02=BIND，0x03=UDP ASSOCIATE
+
+            0x01（CONNECT）：建立TCP连接（如代理HTTP）。
+            0x02（BIND）：反向连接（FTP等）。
+            0x03（UDP ASSOCIATE）：建立UDP代理通道。
+             */
             byte cmd = buffer.getByte(1);
             //目标地址类型：0x01=IPv4，0x03=域名，0x04=IPv6
             byte addrType = buffer.getByte(3);
+            SocketAddress clientAddress = clientSocket.remoteAddress();
             if (version != SOCKS5_VERSION || (cmd != SOCKS5_CMD_CONNECT && cmd != SOCKS5_CMD_UDP_ASSOCIATE)) {
-                log.warn("SOCKS5请求报文不支持：{}", clientSocket.remoteAddress());
+                log.warn("SOCKS5请求报文不支持：{}", clientAddress);
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                 return;
             }
@@ -257,17 +262,11 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
                 }
 
                 //认证检查
-                if (needAuth && !securityService.authorized(clientSocket.remoteAddress().host())) {
+                if (socksAuth && !securityService.authorized(clientAddress.host())) {
                     sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
                     return;
                 }
-                if (cmd == SOCKS5_CMD_UDP_ASSOCIATE) {
-                    // 处理UDP关联请求
-                    //handleUdpAssociate(clientSocket, clientAddress, msgId);
-                    return;
-                }
                 int requestId = clientSocket.hashCode();
-
                 // 通知内网代理建立连接
                 Buffer target = Buffer.buffer()
                         .appendString(SocksProxyProto.TCP.name() + ":")
@@ -277,13 +276,80 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
                 Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
                         .appendBytes(remotePortByte)
                         .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
-                this.cacheRequest(requestId, clientSocket);
-                // 将SOCKS5客户端加入管理
-                serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
-                        .appendByte(JRPMsgType.RECEIVE.getCode())
-                        .appendBuffer(msgId)
-                        .appendBuffer(target));
-
+                if (!socksAuth && !securityService.authorized(clientAddress.host())) {
+                    String host = clientAddress.host();
+                    int remotePort = clientAddress.port();
+                    //延迟获取是否为http请求，http类型请求创建连接后会马上收到数据，‌SSH协议请求不会收到数据，需要通知被代理客户端连接后返回数据。
+                    AtomicBoolean receiveDataFlag = new AtomicBoolean(false);
+                    Handler<Buffer> dataHandler = data -> {
+                        receiveDataFlag.set(true);
+                        boolean httpsFlag = securityService.isHttps(data, targetPort);
+                        boolean httpOrHttpsFlag = securityService.isSecureRequest(data, targetPort);
+                        //authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
+                        boolean authorized = (!httpOrHttpsFlag && securityService.authorized(host)) || this.hasRequest(requestId);
+                        //未授权非HTTP请求都屏蔽
+                        if (!authorized && !httpOrHttpsFlag) {
+                            log.warn("关闭非HTTP(S)类型未授权请求[{}]！", clientAddress);
+                            clientSocket.close();
+                        } else if (authorized) {
+                            log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
+                            this.cacheRequest(requestId, clientSocket);
+                            serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
+                            if (serverSocket.writeQueueFull()) {
+                                serverSocket.pause();
+                                clientSocket.pause();
+                                serverSocket.drainHandler(done -> {
+                                    serverSocket.resume();
+                                    clientSocket.resume();
+                                });
+                            }
+                        } else {
+                            //首次访问或者首次验证都需要走HTTP接口，尝试HTTP用户名密码信息验证
+                            if (securityService.authorizeHttp(clientRegister, host, data)) {
+                                if (cmd == SOCKS5_CMD_UDP_ASSOCIATE) {
+                                    log.debug("非HTTP(S)客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);
+                                    //String notHttpSuccessResponse = securityService.getNotHttpSuccessResponse();
+                                    clientSocket.end(Buffer.buffer(securityService.getOKResponse()));
+                                } else {
+                                    log.debug("HTTP(S)客户端[{}]请求验证通过，开始转发消息!", clientAddress);
+                                    this.cacheRequest(requestId, clientSocket);
+                                    this.serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
+                                            .appendByte(JRPMsgType.RECEIVE.getCode())
+                                            .appendBuffer(msgId)
+                                            .appendBuffer(target));
+                                }
+                            } else {
+                                // 假设我们在处理
+                                log.warn("[{}]未授权访问:{}，浏览器弹窗输入认证信息！", clientAddress, remotePort);
+                                // 将重定向响应写入socket
+                                clientSocket.write(Buffer.buffer(httpsFlag ? securityService.getAuthenticateResponseHttps(host) : securityService.getAuthenticateResponse(host)));
+                            }
+//                            if (httpOrHttpsFlag) {
+//
+//                            } else {
+//                                this.closeRequest(requestId, clientSocket);
+//                                log.warn("[{}]非法访问:{}，直接关闭！", host, remotePort);
+//                                //return false;
+//                            }
+                        }
+                    };
+                    //设置为http验证处理器，用户端浏览器访问任意http地址资源，http验证处理器接收http请求进行认证
+                    clientSocket.handler(dataHandler);
+                    // 发送成功响应
+                    sendSocks5Reply(clientSocket, SOCKS5_REPLY_SUCCEEDED);
+                } else {
+                    if (cmd == SOCKS5_CMD_UDP_ASSOCIATE) {
+                        // 处理UDP关联请求
+                        //handleUdpAssociate(clientSocket, clientAddress, msgId);
+                        return;
+                    }
+                    this.cacheRequest(requestId, clientSocket);
+                    // 将SOCKS5客户端加入管理
+                    this.serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
+                            .appendByte(JRPMsgType.RECEIVE.getCode())
+                            .appendBuffer(msgId)
+                            .appendBuffer(target));
+                }
             } catch (Exception e) {
                 log.error("处理SOCKS5请求失败:{}", e.getMessage(), e);
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> this.closeRequest(0, clientSocket));
@@ -419,6 +485,10 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
 
     /**
      * 处理UDP数据转发
+     *
+     * @param udpSocket    UDP套接字
+     * @param clientSocket 客户端套接字
+     * @param buffer       数据缓冲区
      */
     private void handleUdpData(NetSocket udpSocket, NetSocket clientSocket, Buffer buffer) {
         // 这里实现UDP数据的实际转发逻辑
@@ -428,6 +498,10 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
 
     /**
      * 发送SOCKS5 UDP关联响应
+     *
+     * @param socket    套接字
+     * @param replyCode 回复码
+     * @param bindPort  绑定端口
      */
     private void sendSocks5UdpReply(NetSocket socket, byte replyCode, int bindPort) {
         Buffer reply = Buffer.buffer(new byte[]{
@@ -444,6 +518,9 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
 
     /**
      * 发送认证响应 认证成功返回：0x01,0x00;认证失败返回：0x01,0x01;
+     *
+     * @param socket     连接对象
+     * @param authStatus 认证状态
      */
     private void sendAuthReply(NetSocket socket, byte authStatus) {
         socket.write(Buffer.buffer(new byte[]{SOCKS5_AUTH_VERSION, authStatus}));
@@ -451,6 +528,10 @@ public class SocksVerticle extends AbstractProxyVerticle<NetSocket> {
 
     /**
      * 验证用户名密码
+     *
+     * @param username 用户名
+     * @param password 密码
+     * @return 验证结果
      */
     private boolean validateCredentials(String username, String password) {
         return username != null && username.equals(this.clientRegister.getName()) &&
