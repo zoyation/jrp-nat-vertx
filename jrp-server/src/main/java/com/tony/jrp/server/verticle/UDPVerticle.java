@@ -126,7 +126,7 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
             if (remove) {
                 Integer requestId = entry.getKey();
                 log.debug("清理过期的请求id:{}", requestId);
-                this.closeRequest(requestId, this.getRequest(requestId));
+                this.removeCacheAndClose(requestId);
             }
             return remove;
         });

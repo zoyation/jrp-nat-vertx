@@ -51,8 +51,8 @@ logging:
   # 输出文件名及路径，不配置则不输出文件
   file:
     # 切记，该文件表示正在产出日志的日志文件。并不会打包，当文件大于max-file-size,会根据file-name-pattern格式打包
-    # 名称为log/jrp.log文件夹会在项目根目录下，打包后会在启动包同目录下；名称为/log/jrp.log的文件夹会在项目所在磁盘的跟目录下
-    name: log/jrp.log
+    # 名称为log/jrp.log文件夹会在项目根目录下，打包后会在启动包同目录下；名称为/log/jrp-client.log的文件夹会在项目所在磁盘的跟目录下
+    name: log/jrp-client.log
   logback:
     rollingpolicy:
       clean-history-on-start: true

@@ -132,6 +132,7 @@ public class ProxyServerManager implements InitializingBean {
                     }
                     ClientRegister clientRegister = Json.decodeValue(registerJson, ClientRegister.class);
                     if (clientRegister != null && this.properties.getToken().equals(clientRegister.getToken())) {
+                        log.info("开始启动来自[{}]的注册信息。", remoteAddress);
                         reverseService.start(clientRegister, serverWebSocket).onSuccess(res -> {
                             long serverPing = 0;
                             try {

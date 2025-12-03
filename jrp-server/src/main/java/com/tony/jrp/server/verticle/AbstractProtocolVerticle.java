@@ -108,11 +108,12 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      * 关闭请求
      *
      * @param requestId 请求ID
-     * @param request   请求信息
      */
-    protected void closeRequest(Integer requestId, T request) {
-        this.removeRequest(requestId);
-        this.closeRequest(request);
+    protected void removeCacheAndClose(Integer requestId) {
+        T remove = clientSocketMap.remove(requestId);
+        if (remove != null) {
+            this.closeRequest(remove);
+        }
     }
 
     /**

@@ -76,7 +76,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                         log.warn("[{}]-[{}]类型服务，授权通过，不支持HTTP(S)访问:{}！", clientAddress, clientProxy.getType().name(), remotePort);
                         //String warnResponse = securityService.getHttpWarnResponse();
                         clientSocket.end(Buffer.buffer(securityService.getOKResponse()));
-                        this.closeRequest(requestId, clientSocket);
+                        this.removeCacheAndClose(requestId);
+                        clientSocket.close();
                     } else {
                         log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
                         this.cacheRequest(requestId, clientSocket);
@@ -106,7 +107,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                             }
                         } else if (securityService.canToNetSocket(data.toString())) {
                             log.warn("[{}]websocket或CONNECT未授权访问:{}，直接关闭！", clientAddress, remotePort);
-                            this.closeRequest(requestId, clientSocket);
+                            this.removeCacheAndClose(requestId);
+                            clientSocket.close();
                         } else {
                             // 假设我们在处理HTTP请求
                             log.warn("[{}]HTTP未授权访问:{}，浏览器弹窗输入认证信息！", clientAddress, remotePort);
@@ -114,7 +116,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                             clientSocket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
                         }
                     } else {
-                        this.closeRequest(requestId, clientSocket);
+                        this.removeCacheAndClose(requestId);
+                        clientSocket.close();
                         log.warn("[{}]非法访问:{}，直接关闭！", host, remotePort);
                         //return false;
                     }
@@ -123,7 +126,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             Handler<Void> closeHandler = voidHandler -> {
                 log.debug("客户端[{}]连接关闭！", clientAddress);
                 if (this.hasRequest(requestId)) {
-                    this.closeRequest(requestId, clientSocket);
+                    this.removeCacheAndClose(requestId);
                     //log.warn("客户端连接关闭，丢弃收到的内网代理服务器返回信息，并通知内网服务器断开连接[{}]！", clientAddress);
                     //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
                     log.debug("客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
@@ -139,7 +142,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             vertx.setTimer(200, (id) -> {
                 if (authorized && !httpFlag && !receiveDataFlag.get()) {
                     //关闭历史未移除连接
-                    this.closeRequest(requestId, clientSocket);
+                    this.removeCacheAndClose(requestId);
                     log.debug("发送来自客户端[{}]的非HTTP初始化请求!", clientAddress);
                     this.cacheRequest(requestId, clientSocket);
                     serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId));
@@ -147,7 +150,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                 //未授权不是http请求，是非法请求
                 if (!authorized && !httpFlag && !receiveDataFlag.get()) {
                     log.warn("来自客户端[{}]的非HTTP初始化请求，未通过认证，直接关闭!", clientAddress);
-                    this.closeRequest(requestId, clientSocket);
+                    this.removeCacheAndClose(requestId);
+                    clientSocket.close();
                 }
             });
         }).exceptionHandler(err -> {
@@ -181,7 +185,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             SocketAddress remoteAddress = clientNetSocket.remoteAddress();
             if (JRPMsgType.CLOSE == msgType) {
                 log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", remoteAddress);
-                this.closeRequest(requestId, clientNetSocket);
+                this.removeCacheAndClose(requestId);
             } else if (JRPMsgType.RESPONSE == msgType) {
                 log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", remoteAddress);
                 clientNetSocket.write(realData);

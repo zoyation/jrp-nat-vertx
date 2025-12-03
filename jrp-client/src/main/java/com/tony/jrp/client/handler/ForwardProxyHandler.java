@@ -1,6 +1,7 @@
 package com.tony.jrp.client.handler;
 
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.enums.SocksProxyProto;
 import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
@@ -21,7 +22,7 @@ import java.util.concurrent.CountDownLatch;
  * sockets消息处理器
  */
 @Slf4j
-public class Socks5ProxyHandler extends AbstractProxyHandler {
+public class ForwardProxyHandler extends AbstractProxyHandler {
     /**
      * 代理请求对象缓存
      */
@@ -63,7 +64,7 @@ public class Socks5ProxyHandler extends AbstractProxyHandler {
         }
     }
 
-    public Socks5ProxyHandler(Vertx vertx) {
+    public ForwardProxyHandler(Vertx vertx) {
         super(vertx);
     }
 
@@ -93,12 +94,17 @@ public class Socks5ProxyHandler extends AbstractProxyHandler {
                 if (netSocket != null && targetInfo != null) {
                     sendTcpData(data, netSocket);
                 } else {
-                    //首次创建TCP连接，格式：TCP:IP:PORT
-                    String connectStr = data.toString();
-                    String protocol = connectStr.substring(0, connectStr.indexOf(":"));
-                    String targetHost = connectStr.substring(connectStr.indexOf(":") + 1, connectStr.lastIndexOf(":"));
-                    int targetPort = data.getInt(protocol.length() + targetHost.length() + 2);
-                    final SocketAddress socketAddress = SocketAddress.inetSocketAddress(targetPort, targetHost);
+                    //首次创建TCP连接，格式：协议类型SocksProxyProto里枚举值（1字节）HOST(域名或IP):PORT（2字节）
+                    SocksProxyProto protocol = SocksProxyProto.getByProto(data.getByte(0));
+                    StringBuilder targetHost = new StringBuilder();
+                    for (int i = 1; i < data.length(); i++) {
+                        if (data.getByte(i) == ':') {
+                            break;
+                        }
+                        targetHost.append((char) data.getByte(i));
+                    }
+                    int targetPort = data.getBuffer(1 + targetHost.length() + 1, data.length()).getUnsignedShort(0);
+                    final SocketAddress socketAddress = SocketAddress.inetSocketAddress(targetPort, targetHost.toString());
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, targetHost, targetPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
                     // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
@@ -114,7 +120,7 @@ public class Socks5ProxyHandler extends AbstractProxyHandler {
                                 NetSocket proxySocket = asyncResult.result();
                                 proxySocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
                                 netSocketMap.put(clientId, proxySocket);
-                                targetMap.put(clientId, TargetInfo.of(targetHost, targetPort));
+                                targetMap.put(clientId, TargetInfo.of(targetHost.toString(), targetPort));
                                 proxySocket.exceptionHandler(e -> log.debug("代理转发服务异常：{}", e.getMessage(), e));
                                 proxySocket.closeHandler(ch -> {
                                     if (webSocket != null && netSocketMap.remove(clientId) != null) {
@@ -175,7 +181,7 @@ public class Socks5ProxyHandler extends AbstractProxyHandler {
     @Override
     public void close() throws IOException {
         if (!netSocketMap.isEmpty()) {
-            log.info("停止SOCKS TCP转发服务");
+            log.info("停止TCP转发服务");
             netSocketMap.values().forEach(NetSocket::close);
             netSocketMap.clear();
             targetMap.clear();
