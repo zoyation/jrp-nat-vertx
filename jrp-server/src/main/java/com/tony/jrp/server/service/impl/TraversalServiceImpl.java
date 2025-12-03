@@ -3,8 +3,8 @@ package com.tony.jrp.server.service.impl;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.utils.PortChecker;
-import com.tony.jrp.server.service.IReverseService;
-import com.tony.jrp.server.verticle.ClientReverseProxyVerticle;
+import com.tony.jrp.server.service.ITraversalService;
+import com.tony.jrp.server.verticle.RegisterTraversalVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
@@ -24,11 +24,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 穿透服务端
+ * 穿透服务初始化控制类
+ * 接收注册信息，启动穿透服务
  */
 @Service
 @Slf4j
-public class ReverseServiceImpl implements IReverseService {
+public class TraversalServiceImpl implements ITraversalService {
     /**
      * 允许穿透的最小端口
      */
@@ -47,14 +48,14 @@ public class ReverseServiceImpl implements IReverseService {
     /**
      * 所有代理信息
      */
-    private final Map<String, ClientReverseProxyVerticle> reverseProxyMap = new ConcurrentHashMap<>();
+    private final Map<String, RegisterTraversalVerticle> verticleMap = new ConcurrentHashMap<>();
     /**
      * 所有已使用端口
      */
     private final Set<Integer> allPorts = new ConcurrentHashSet<>();
 
     @Override
-    public synchronized Future<Boolean> startReverseProxy(ClientRegister clientRegister, ServerWebSocket webSocket) {
+    public synchronized Future<Boolean> start(ClientRegister clientRegister, ServerWebSocket webSocket) {
         List<ClientProxy> proxies = clientRegister.getProxies();
         //进行端口检查，如果端口被占用了，提示不能使用
         return vertx.executeBlocking(() -> {
@@ -70,10 +71,10 @@ public class ReverseServiceImpl implements IReverseService {
                 CountDownLatch countDownLatch = new CountDownLatch(1);
                 AtomicBoolean result = new AtomicBoolean();
                 try {
-                    final ClientReverseProxyVerticle newClientReverseProxyVerticle = new ClientReverseProxyVerticle(clientRegister, webSocket, securityService);
-                    reverseProxyMap.put(webSocket.textHandlerID(), newClientReverseProxyVerticle);
+                    final RegisterTraversalVerticle verticle = new RegisterTraversalVerticle(clientRegister, webSocket, securityService);
+                    verticleMap.put(webSocket.textHandlerID(), verticle);
                     proxies.forEach(r -> allPorts.add(r.getRemote_port()));
-                    vertx.deployVerticle(newClientReverseProxyVerticle).onSuccess(id -> {
+                    vertx.deployVerticle(verticle).onSuccess(id -> {
                         result.set(true);
                         countDownLatch.countDown();
                     }).onFailure(e -> {
@@ -101,11 +102,11 @@ public class ReverseServiceImpl implements IReverseService {
     }
 
     @Override
-    public Future<String> stopReverseProxy(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
+    public Future<String> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
         Promise<String> promise = Promise.promise();
         if (clientProxyList != null) {
             clientProxyList.forEach(r -> allPorts.remove(r.getRemote_port()));
-            ClientReverseProxyVerticle clientReverseProxyVerticle = reverseProxyMap.remove(webSocket.textHandlerID());
+            RegisterTraversalVerticle clientReverseProxyVerticle = verticleMap.remove(webSocket.textHandlerID());
             if (clientReverseProxyVerticle != null) {
                 try {
                     vertx.undeploy(clientReverseProxyVerticle.deploymentID())

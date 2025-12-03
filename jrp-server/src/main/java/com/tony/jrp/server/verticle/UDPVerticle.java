@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * udp穿透服务
  */
 @Slf4j
-public class UDPVerticle extends AbstractProxyVerticle<DatagramPacket> {
+public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
     public static final String AUTHORIZATION = "Authorization";
     /**
      * udp请求处理对象

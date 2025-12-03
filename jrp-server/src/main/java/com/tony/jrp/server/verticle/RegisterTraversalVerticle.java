@@ -16,10 +16,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * 服务器转发代理主控类
+ * 服务器转发穿透主控类
+ * 一个客户端一个代理服务对应一个verticle
  */
 @Slf4j
-public class ClientReverseProxyVerticle extends AbstractVerticle {
+public class RegisterTraversalVerticle extends AbstractVerticle {
     /**
      * 远程端口byte数组长度。
      */
@@ -50,7 +51,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
     /**
      * 所有代理Verticle
      */
-    private final Map<Integer, AbstractProxyVerticle> proxyVerticleMap = new ConcurrentHashMap<>();
+    private final Map<Integer, AbstractProtocolVerticle> verticleMap = new ConcurrentHashMap<>();
 
 
     /**
@@ -60,7 +61,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
      * @param serverSocket    服务器socket
      * @param securityService 安全认证服务
      */
-    public ClientReverseProxyVerticle(ClientRegister clientRegister, ServerWebSocket serverSocket, SecurityService securityService) {
+    public RegisterTraversalVerticle(ClientRegister clientRegister, ServerWebSocket serverSocket, SecurityService securityService) {
         this.clientRegister = clientRegister;
         this.serverSocket = serverSocket;
         this.securityService = securityService;
@@ -82,7 +83,7 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
             //获取消息标识：代理端口+请求id
             Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN);
             Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
-            AbstractProxyVerticle verticle = proxyVerticleMap.get(remotePort);
+            AbstractProtocolVerticle verticle = verticleMap.get(remotePort);
             if (verticle == null) {
                 log.warn("端口[{}]收到内网代理服务返回消息，但是未找到端口对应代理，客户端标识id[{}]对应连接已经失效，发送关闭连接消息到内网代理服务！", remotePort, requestId);
                 serverSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
@@ -93,13 +94,13 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
         //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端
         for (ClientProxy clientProxy : clientRegister.getProxies()) {
             Integer remotePort = clientProxy.getRemote_port();
-            synchronized (ClientReverseProxyVerticle.this) {
-                if (proxyVerticleMap.get(remotePort) != null) {
+            synchronized (RegisterTraversalVerticle.this) {
+                if (verticleMap.get(remotePort) != null) {
                     log.warn("已存在外网端口为[{}]的代理信息，不做处理！", remotePort);
                     continue;
                 }
             }
-            AbstractProxyVerticle verticle;
+            AbstractProtocolVerticle verticle;
             switch (clientProxy.getType()) {
                 case HTTPS:
                 case HTTP:
@@ -113,21 +114,21 @@ public class ClientReverseProxyVerticle extends AbstractVerticle {
                 }
                 case SOCKS4:
                 case SOCKS5:
-                    verticle = new Socks5Verticle(serverSocket, securityService, clientRegister, clientProxy);
+                    verticle = new ForwardProxyVerticle(serverSocket, securityService, clientRegister, clientProxy);
                     break;
                 default:
                     throw new Exception("不支持代理类型：" + clientProxy.getType().name() + "！");
             }
             Future<String> tcpFuture = vertx.deployVerticle(verticle);
-            tcpFuture.onSuccess(id -> proxyVerticleMap.put(remotePort, verticle)).onFailure(Throwable::printStackTrace);
+            tcpFuture.onSuccess(id -> verticleMap.put(remotePort, verticle)).onFailure(Throwable::printStackTrace);
         }
     }
 
     @Override
     public void stop() {
-        String ports = proxyVerticleMap.keySet().stream().map(Object::toString).collect(Collectors.joining(","));
+        String ports = verticleMap.keySet().stream().map(Object::toString).collect(Collectors.joining(","));
         log.info("清理端口[{}]下所有代理缓存！", ports);
-        proxyVerticleMap.values().forEach((v) -> vertx.undeploy(v.deploymentID()));
-        proxyVerticleMap.clear();
+        verticleMap.values().forEach((v) -> vertx.undeploy(v.deploymentID()));
+        verticleMap.clear();
     }
 }

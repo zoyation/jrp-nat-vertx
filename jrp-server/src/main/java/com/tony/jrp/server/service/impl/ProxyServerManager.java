@@ -6,7 +6,7 @@ import com.tony.jrp.common.model.RegisterResult;
 import com.tony.jrp.server.config.JRPServerProperties;
 import com.tony.jrp.server.model.RegisterInfo;
 import com.tony.jrp.server.service.IRegisterService;
-import com.tony.jrp.server.service.IReverseService;
+import com.tony.jrp.server.service.ITraversalService;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
@@ -58,7 +58,7 @@ public class ProxyServerManager implements InitializingBean {
      * 请求转发服务
      */
     @Autowired
-    protected IReverseService reverseService;
+    protected ITraversalService reverseService;
     /**
      * 注册信息管理
      */
@@ -132,7 +132,7 @@ public class ProxyServerManager implements InitializingBean {
                     }
                     ClientRegister clientRegister = Json.decodeValue(registerJson, ClientRegister.class);
                     if (clientRegister != null && this.properties.getToken().equals(clientRegister.getToken())) {
-                        reverseService.startReverseProxy(clientRegister, serverWebSocket).onSuccess(res -> {
+                        reverseService.start(clientRegister, serverWebSocket).onSuccess(res -> {
                             long serverPing = 0;
                             try {
                                 final AtomicBoolean pongReceived = new AtomicBoolean(true);
@@ -154,7 +154,7 @@ public class ProxyServerManager implements InitializingBean {
                                     RegisterInfo remove = registerMap.remove(textHandlerID);
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
-                                        reverseService.stopReverseProxy(remove.getProxies(), serverWebSocket)
+                                        reverseService.stop(remove.getProxies(), serverWebSocket)
                                                 .onSuccess(proxySuccess -> log.info("{}！", proxySuccess))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
                                         remove.setStatus(STATUS_OFFLINE);
@@ -196,7 +196,7 @@ public class ProxyServerManager implements InitializingBean {
                                     serverWebSocket.close();
                                 }
                                 log.warn("websocket[{}]注册异常，开始停止代理：{}", remoteAddress, clientRegister);
-                                reverseService.stopReverseProxy(clientRegister.getProxies(), serverWebSocket)
+                                reverseService.stop(clientRegister.getProxies(), serverWebSocket)
                                         .onSuccess(proxySuccess -> log.info("停止注册异常代理成功！"))
                                         .onFailure(err -> log.error("停止注册异常代理失败：{}", err.getMessage(), err));
                             }

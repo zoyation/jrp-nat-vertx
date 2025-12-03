@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * TCP穿透服务
  */
 @Slf4j
-public class TCPVerticle extends AbstractProxyVerticle<NetSocket> {
+public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
 
     public static final String CERTIFICATE_UNKNOWN = "certificate_unknown";
 

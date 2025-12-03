@@ -9,14 +9,12 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ServerWebSocket;
 
 import java.util.Map;
-import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * 穿透服务基础类
+ * 穿透协议服务基础类
  */
-public abstract class AbstractProxyVerticle<T> extends AbstractVerticle {
+public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
     /**
      * 读写超时时间，单位秒
      */
@@ -42,76 +40,16 @@ public abstract class AbstractProxyVerticle<T> extends AbstractVerticle {
      */
     protected final ClientProxy clientProxy;
 
+    /**
+     * 请求ID池，缓存请求信息
+     */
     private final Map<Integer, T> clientSocketMap = new ConcurrentHashMap<>();
 
-
-    /**
-     * 请求ID池
-     *
-     * @param <T>
-     */
-    private class RequestIdPool<T> {
-        private final Map<Integer, T> resourceMap = new ConcurrentHashMap<>();
-        private final Map<T, Integer> idMap = new ConcurrentHashMap<>();
-        private final Queue<Integer> availableIds = new ConcurrentLinkedQueue<>();
-        private final int maxCapacity;
-
-        public RequestIdPool(int maxCapacity) {
-            this.maxCapacity = maxCapacity;
-            // 预先生成可用ID队列
-            for (int i = 0; i < maxCapacity; i++) {
-                availableIds.offer(i);
-            }
-        }
-
-        public Integer acquire(T resource) {
-            Integer id = availableIds.poll();
-            if (id == null) {
-                throw new RuntimeException("Resource pool exhausted");
-            }
-            resourceMap.put(id, resource);
-            idMap.put(resource, id);
-            return id;
-        }
-
-        public T release(Integer id) {
-            T resource = resourceMap.remove(id);
-            if (resource != null) {
-                idMap.remove(resource);
-                availableIds.offer(id);
-            }
-            return resource;
-        }
-
-        public T getResource(Integer id) {
-            return resourceMap.get(id);
-        }
-
-        public Integer getId(T res) {
-            return idMap.get(res);
-        }
-    }
-
-    /**
-     * 默认100万个并发的请求ID池
-     */
-    private final RequestIdPool<String> requestIdPool = new RequestIdPool<>(1000000);
-
-    protected AbstractProxyVerticle(ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
+    protected AbstractProtocolVerticle(ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
         this.serverSocket = serverSocket;
         this.securityService = securityService;
         this.clientRegister = clientRegister;
         this.clientProxy = clientProxy;
-    }
-
-
-    /**
-     * 释放请求ID
-     *
-     * @param id 请求ID
-     */
-    public String release(Integer id) {
-        return requestIdPool.release(id);
     }
 
     @Override
@@ -130,12 +68,12 @@ public abstract class AbstractProxyVerticle<T> extends AbstractVerticle {
     protected abstract void init();
 
     /**
-     * 移除请求
+     * 移除请求缓存
      *
      * @param requestId 请求ID
      */
-    protected T removeRequest(Integer requestId) {
-        return clientSocketMap.remove(requestId);
+    protected void removeRequest(Integer requestId) {
+        clientSocketMap.remove(requestId);
     }
 
     /**
@@ -185,7 +123,7 @@ public abstract class AbstractProxyVerticle<T> extends AbstractVerticle {
     protected abstract void closeRequest(T request);
 
     /**
-     * 向内网代理服务器发送数据
+     * 转发向内网代理服务器返回数据给用户端
      *
      * @param msgType   消息类型
      * @param msgId     消息ID
