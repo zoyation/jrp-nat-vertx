@@ -12,6 +12,7 @@ import com.tony.jrp.common.utils.CPUUtils;
 import io.vertx.config.ConfigRetriever;
 import io.vertx.config.ConfigRetrieverOptions;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
@@ -30,7 +31,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -41,9 +42,25 @@ import java.util.stream.Collectors;
 @Component
 @Slf4j
 public class ProxyClientManager implements InitializingBean {
+    /**
+     * 连接超时1秒
+     */
     public static final int CONNECT_TIMEOUT = 1000;
-    public static final int IDLE_TIMEOUT = 10;
+    /**
+     * 注册超时1秒
+     */
+    public static final int REGISTER_TIMEOUT = 1000;
+    /**
+     * 空闲超时 10秒
+     */
+    public static final int IDLE_TIMEOUT = 4;
+    /**
+     * 缓冲区大小1024*1024*2 byte，默认2M
+     */
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
+    /**
+     * 写队列最大长度100
+     */
     public static final int WRITE_QUEUE_MAX_SIZE = 100;
     /**
      * 消息类型和端口byte长度
@@ -53,8 +70,12 @@ public class ProxyClientManager implements InitializingBean {
      * 消息类型、端口和请求id byte长度
      */
     public static final int TYPE_PORT_REQUEST_ID_LEN = JRPMsgType.TYPE_LEN + 2 + 4;
+    public static final int PING_DELAY = 2000;
     @Autowired
     protected Vertx vertx;
+    /**
+     * 配置服务
+     */
     @Autowired
     protected IConfigService configService;
     /**
@@ -62,21 +83,17 @@ public class ProxyClientManager implements InitializingBean {
      */
     @Autowired
     protected ProxyClientProperties properties;
+
     private final Object serverLock = new Object();
     List<ClientProxy> clientProxyList = new ArrayList<>();
     private HttpServer server;
     private int registerPort;
     private String registerHost;
-    private final ScheduledExecutorService registerService = Executors.newScheduledThreadPool(1);
-    private ScheduledFuture<?> registerSchedule = null;
-    private Integer reconnectionTimes = 0;
+    private volatile Integer reconnectionTimes = 0;
     //registerWebSocket为null，未注册
     private volatile WebSocket registerWebSocket = null;
-    private Long pingTimerId = null;
+    private volatile Long pingTimerId = null;
     private String errorMessage = "";
-    //private final Map<String, NetSocket> netSocketMap = new ConcurrentHashMap<>();
-
-    //private final Map<String, DatagramSocket> datagramSocketMap = new ConcurrentHashMap<>();
     /**
      * TCP代理处理器
      */
@@ -91,14 +108,23 @@ public class ProxyClientManager implements InitializingBean {
      */
     private AbstractProxyHandler httpForwardHandler = null;
     /**
-     * socks4/5正向代理穿透处理器
+     * http/https/socks4/socks4a/socks5等正向代理穿透处理器
      */
-    private AbstractProxyHandler socksProxyHandler = null;
+    private AbstractProxyHandler forwardProxyHandler = null;
 
     @Data
     private static class RegisterStatus {
+        /**
+         * 是否成功
+         */
         private Boolean success;
+        /**
+         * 消息
+         */
         private String message;
+        /**
+         * 服务端地址
+         */
         private String remoteHost;
 
         private RegisterStatus(Boolean success, String message, String remoteHost) {
@@ -151,14 +177,17 @@ public class ProxyClientManager implements InitializingBean {
      * 创建代理处理器
      */
     private void closeAndCreateProxyHandler() throws IOException {
-        closeProxySocket();
+        closeProxyHandler();
         tcpProxyHandler = new TcpReverseProxyHandler(vertx);
         udpProxyHandler = new UdpReverseProxyHandler(vertx);
         httpForwardHandler = new HttpForwardProxyHandler(vertx);
-        socksProxyHandler = new ForwardProxyHandler(vertx);
+        forwardProxyHandler = new ForwardProxyHandler(vertx);
     }
 
-    private void closeProxySocket() throws IOException {
+    /**
+     * 关闭代理处理器
+     */
+    private void closeProxyHandler() throws IOException {
         if (tcpProxyHandler != null) {
             log.info("停止TCP穿透转发服务");
             tcpProxyHandler.close();
@@ -171,9 +200,9 @@ public class ProxyClientManager implements InitializingBean {
             log.info("停止http正向代理穿透转发服务");
             httpForwardHandler.close();
         }
-        if (socksProxyHandler != null) {
+        if (forwardProxyHandler != null) {
             log.info("停止socks正向代理穿透转发服务");
-            socksProxyHandler.close();
+            forwardProxyHandler.close();
         }
     }
 
@@ -243,307 +272,319 @@ public class ProxyClientManager implements InitializingBean {
             }
             this.server = startServer(newConfig);
         }
-        reloadProxies(newConfig.getRemote_proxies());
+        reconnectionTimes = 0;
+        if (registerWebSocket != null) {
+            registerWebSocket.close().onComplete(r -> {
+                registerWebSocket = null;
+                startRegister(newConfig.getRemote_proxies());
+            });
+        } else {
+            startRegister(newConfig.getRemote_proxies());
+        }
     }
 
-    public void reloadProxies(List<ClientProxy> remoteProxies) {
-        reconnectionTimes = 0;
-        if (registerSchedule != null) {
-            log.info("停止注册任务...");
-            registerSchedule.cancel(true);
-            log.info("停止注册任务完成");
-        }
-        this.closeSocket(true).onSuccess(success -> {
-            try {
-                ClientRegister register = new ClientRegister();
-                register.setId(CPUUtils.getCpuId());
-                register.setToken(properties.getToken());
-                register.setUsername(properties.getUsername());
-                register.setPassword(properties.getPassword());
-                List<ClientProxy> registerProxies = new ArrayList<>();
-                if (remoteProxies != null) {
-                    registerProxies.addAll(remoteProxies);
-                }
-                register.setProxies(registerProxies);
-                Map<Integer, ClientProxy> remotePortClientMap = registerProxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r));
-                log.info("开始注册...");
-                vertx.executeBlocking(() -> tryRegister(register, remotePortClientMap)).onComplete(result -> {
-                    if (registerSchedule != null) {
-                        registerSchedule.cancel(true);
-                    }
-                    //间隔五秒进行断线判断，如果断线重新注册
-                    registerSchedule = registerService.scheduleWithFixedDelay(() -> {
-                        if (registerWebSocket == null) {
-                            if (reconnectionTimes >= properties.getReconnectionTimes()) {
-                                log.warn("与外网穿透服务断开连接或未注册，断线重连次数已达限制次数[{}]，不再重连!", properties.getReconnectionTimes());
-                                registerSchedule.cancel(false);
-                            } else {
-                                reconnectionTimes = reconnectionTimes + 1;
-                                log.info("与外网穿透服务断开连接或未注册，尝试第[{}]次注册...", reconnectionTimes);
-                                if (tryRegister(register, remotePortClientMap)) {
-                                    reconnectionTimes = 0;
-                                }
-                            }
-                        }
-                    }, 5, 5, TimeUnit.SECONDS);
-                });
-            } catch (Exception e) {//注册失败
-                String errorMessage = e.getMessage();
-                log.error("内网穿透注册失败：{}", errorMessage, e);
-                registerWebSocket = null;
+    /**
+     * 开始注册
+     *
+     * @param remoteProxies 穿透配置信息
+     */
+    private void startRegister(List<ClientProxy> remoteProxies) {
+        try {
+            ClientRegister register = new ClientRegister();
+            register.setId(CPUUtils.getCpuId());
+            register.setToken(properties.getToken());
+            register.setUsername(properties.getUsername());
+            register.setPassword(properties.getPassword());
+            List<ClientProxy> registerProxies = new ArrayList<>();
+            if (remoteProxies != null) {
+                registerProxies.addAll(remoteProxies);
             }
-        });
+            register.setProxies(registerProxies);
+            Map<Integer, ClientProxy> remotePortClientMap = registerProxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r));
+            log.info("开始注册...");
+            if (reconnectionTimes < properties.getReconnectionTimes()) {
+                vertx.setTimer(1, registerTimerHandler(register, remotePortClientMap));
+            }
+        } catch (Exception e) {//注册失败
+            String errorMessage = e.getMessage();
+            log.error("内网穿透注册失败：{}", errorMessage, e);
+            registerWebSocket = null;
+        }
+    }
+
+    /**
+     * 注册处理器
+     *
+     * @param register            注册信息
+     * @param remotePortClientMap 远程端口对应的客户端信息
+     * @return 定时器ID
+     */
+    private Handler<Long> registerTimerHandler(ClientRegister register, Map<Integer, ClientProxy> remotePortClientMap) {
+        return id -> {
+            tryRegister(register, remotePortClientMap).onComplete(r -> {
+                if (r.succeeded() && r.result()) {
+                    reconnectionTimes = 0;
+                    log.info("内网穿透注册成功！");
+                } else {
+                    log.error("内网穿透注册失败！");
+                    if (reconnectionTimes >= properties.getReconnectionTimes()) {
+                        log.warn("与外网穿透服务断开连接或未注册，断线重连次数已达限制次数[{}]，不再重连!", properties.getReconnectionTimes());
+                    } else {
+                        reconnectionTimes = reconnectionTimes + 1;
+                        //5秒后重连
+                        vertx.setTimer(5000, registerTimerHandler(register, remotePortClientMap));
+                    }
+                }
+            });
+        };
     }
 
     /**
      * @param register            穿透注册信息
      * @param remotePortClientMap 穿透注册信息map
+     * @return true:注册成功，false:注册失败
      */
-    private Boolean tryRegister(ClientRegister register, Map<Integer, ClientProxy> remotePortClientMap) {
-        AtomicReference<Boolean> result = new AtomicReference<>(false);
-        if (registerWebSocket == null) {
-            synchronized (ProxyClientManager.this) {
-                if (registerWebSocket == null) {
-                    WebSocketClientOptions options = getWebSocketClientOptions();
-                    CountDownLatch registerCountDown = new CountDownLatch(1);
-                    WebSocketConnectOptions connectOptions = new WebSocketConnectOptions().setPort(registerPort).setHost(registerHost).setURI("/").setConnectTimeout(CONNECT_TIMEOUT);
-                    connectOptions.setRegisterWriteHandlers(true);
-                    vertx.createWebSocketClient(options).connect(connectOptions).onComplete(webSocket -> {
-                        // 设置处理pong的回调
-                        try {
-                            final AtomicBoolean pongReceived = new AtomicBoolean(true);
-                            webSocket.pongHandler(pongFrame -> {
-                                pongReceived.set(true);
-                                log.debug("Pong received:{}", pongFrame.toString());
-                            });
-                            webSocket.handler(buffer -> {
-                                //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为{
-                                byte msgType = buffer.getByte(0);
-                                JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
-                                if (jrpMsgType == null) {
-                                    log.error("未知消息类型：{}", buffer);
-                                    webSocket.close();
-                                    return;
-                                }
-                                switch (jrpMsgType) {
-                                    case REGISTER_RESULT:
-                                        try {
-                                            RegisterResult registerResult = Json.decodeValue(buffer.getBuffer(1, buffer.length()), RegisterResult.class);
-                                            if (registerResult.isSuccess()) {
-                                                result.set(true);
-                                                log.info("注册成功：\r\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
-                                                this.closeAndCreateProxyHandler();
-                                                for (ClientProxy proxy : register.getProxies()) {
-                                                    if (proxy.getType() != null) {
-                                                        //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
-                                                        String message;
-                                                        String logMessage = "";
-                                                        switch (proxy.getType()) {
-                                                            case HTTP:
-                                                                message = "HTTP服务[%s]穿透后外网地址：[http://%s:%s]！";
-                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
-                                                                break;
-                                                            case HTTPS:
-                                                                message = "HTTPS服务[{%s}]穿透后外网地址：[https://%s:%s]！";
-                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
-                                                                break;
-                                                            case TCP:
-                                                                message = "TCP服务[{%s}]穿透后外网地址：[%s:%s]！";
-                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
-                                                                break;
-                                                            case UDP:
-                                                                message = "UDP服务[{%s}]穿透后外网地址：[%s:%s]！";
-                                                                logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
-                                                                break;
-                                                            case HTTP_PROXY:
-                                                                message = "HTTP代理服务穿透后外网地址：[http://%s:%s]！";
-                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
-                                                                break;
-                                                            case HTTPS_PROXY:
-                                                                message = "HTTPS代理服务穿透后外网地址：[https://%s:%s]！";
-                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
-                                                                break;
-                                                            case SOCKS4:
-                                                                message = "SOCKS4代理服务穿透后外网地址：[%s:%s]！";
-                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
-                                                                break;
-                                                            case SOCKS5:
-                                                                message = "SOCKS5代理服务穿透后外网地址：[%s:%s]！";
-                                                                logMessage = String.format(message, registerHost, proxy.getRemote_port());
-                                                                break;
-                                                        }
-                                                        log.info(logMessage);
-                                                    }
-                                                }
-                                                clientProxyList = register.getProxies();
-                                                registerWebSocket = webSocket;
-                                                webSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
-                                                pingTimerId = vertx.setPeriodic(5000, id -> {
-                                                    if (pongReceived.get()) {
-                                                        pongReceived.set(false);
-                                                        webSocket.writePing(Buffer.buffer("ping")).timeout(1, TimeUnit.SECONDS).onComplete(prs -> {
-                                                            if (!prs.succeeded()) {
-                                                                log.error("ping失败：{}", prs.cause().getMessage(), prs.cause());
-                                                                vertx.cancelTimer(id);
-                                                                closeSocket(true);
-                                                            }
-                                                        });
-                                                    } else {
-                                                        log.warn("未收到服务端[{}]pong消息！", registerWebSocket.remoteAddress().toString());
-                                                    }
-                                                });
-                                            } else {
-                                                webSocket.close();
-                                                errorMessage = registerResult.getMsg();
-                                                log.error("注册失败：{}", errorMessage);
-                                            }
-                                        } catch (Exception e) {
-                                            webSocket.close();
-                                            errorMessage = e.getMessage();
-                                            log.error("注册异常：{}", errorMessage, e);
-                                        } finally {
-                                            registerCountDown.countDown();
-                                        }
-                                        break;
-                                    case CLOSE:
-                                    case RECEIVE:
-                                        //代理端口
-                                        Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_LEN).getUnsignedShort(0);
-                                        //请求唯一标识,代理端口之后开始取
-                                        Integer requestId = buffer.getBuffer(TYPE_PORT_LEN, TYPE_PORT_REQUEST_ID_LEN).getInt(0);
-                                        //获取消息标识：代理端口+请求id，消息类型之后取
-                                        Buffer msgId = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_REQUEST_ID_LEN);
-                                        //收到外网穿透服务器发送的客户端请求通知
-                                        Buffer data = buffer.getBuffer(TYPE_PORT_REQUEST_ID_LEN, buffer.length());
-                                        log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", requestId);
-                                        ClientProxy proxy = remotePortClientMap.get(remotePort);
-                                        switch (proxy.getType()) {
-                                            case HTTP:
-                                            case HTTPS:
-                                            case TCP:
-                                                tcpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
-                                                break;
-                                            case UDP:
-                                                udpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
-                                                break;
-                                            case HTTP_PROXY:
-                                            case HTTPS_PROXY:
-                                                httpForwardHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
-                                                break;
-                                            case SOCKS4:
-                                            case SOCKS5:
-                                                socksProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
-                                                break;
-                                        }
-                                }
-                            });
-                            webSocket.closeHandler(closeHandler -> {
-                                log.warn("websocket 连接断开：{}", webSocket.remoteAddress());
-                                if (registerWebSocket == null) {
-                                    registerCountDown.countDown();
-                                }
-                                closeSocket(false);
-                            });
-                            webSocket.exceptionHandler(err -> {
-                                log.error("websocket 连接异常：{}", err.getMessage(), err);
-                                if (registerWebSocket == null) {
-                                    registerCountDown.countDown();
-                                }
-                                closeSocket(true);
-                            });
-                            String registerInfo = Json.encodePrettily(register);
-                            log.info("开始发送注册消息：\r\n{}", registerInfo);
-                            webSocket.write(Buffer.buffer(JRPMsgType.REGISTER.codeArray()).appendBuffer(Buffer.buffer(registerInfo))).onComplete((rt) -> {
-                                if (rt.succeeded()) {
-                                    log.info("发送注册消息成功，等待返回!");
-                                } else {
-                                    errorMessage = rt.cause().getMessage();
-                                    log.info("发送注册消息失败，error：{}", rt.cause().getMessage(), rt.cause());
-                                    registerCountDown.countDown();
-                                }
-                            });
-                        } catch (Exception e) {
-                            closeSocket(true);
-                            registerCountDown.countDown();
-                            errorMessage = e.getMessage();
-                            log.error("websocket 连接初始化异常：{}", e.getMessage(), e);
-                        }
-                    }, err -> {
-                        errorMessage = err.getMessage();
-                        log.error("websocket 初始化异常：{}", err.getMessage(), err);
-                        registerCountDown.countDown();
-                    });
-                    try {
-                        boolean countDown = registerCountDown.await(10, TimeUnit.SECONDS);
-                        if (!countDown) {
-                            log.warn("websocket 注册超时！");
-                        }
-                    } catch (InterruptedException err) {
-                        log.error("websocket 初始化异常：{}", err.getMessage(), err);
+    private Future<Boolean> tryRegister(ClientRegister register, Map<Integer, ClientProxy> remotePortClientMap) {
+        if (reconnectionTimes == 0) {
+            log.info("与外网穿透服务断开或首次注册或配置变动，开始注册...", reconnectionTimes);
+        } else {
+            log.info("与外网穿透服务断开连接或注册失败，尝试第[{}]次注册...", reconnectionTimes);
+        }
+        WebSocketClientOptions options = getWebSocketClientOptions();
+        Promise<Boolean> registerPromise = Promise.promise();
+        WebSocketConnectOptions connectOptions = new WebSocketConnectOptions().setPort(registerPort).setHost(registerHost).setURI("/").setConnectTimeout(CONNECT_TIMEOUT);
+        connectOptions.setRegisterWriteHandlers(true);
+        AtomicReference<WebSocket> currentWebSocket = new AtomicReference<>();
+        vertx.createWebSocketClient(options).connect(connectOptions).onComplete(webSocket -> {
+            currentWebSocket.set(webSocket);
+            // 设置处理pong的回调
+            try {
+                final AtomicBoolean pongReceived = new AtomicBoolean(true);
+                webSocket.pongHandler(pongFrame -> {
+                    pongReceived.set(true);
+                    log.debug("Pong received:{}", pongFrame.toString());
+                });
+                webSocket.closeHandler(closeHandler -> {
+                    log.warn("websocket 连接断开：{}", webSocket.remoteAddress());
+                    if (registerWebSocket == null) {
+                        registerPromise.tryComplete(false);
                     }
-                } else {
-                    result.set(true);
+                    try {
+                        if (pingTimerId != null) {
+                            log.info("取消ping任务:{}", pingTimerId);
+                            vertx.cancelTimer(pingTimerId);
+                        }
+                        this.closeProxyHandler();
+                    } catch (Exception e) {
+                        log.error("closeWebSocket error：{}", e.getMessage(), e);
+                    } finally {
+                        pingTimerId = null;
+                        if (registerWebSocket != null) {
+                            registerWebSocket = null;
+                            //5秒后重连
+                            vertx.setTimer(5000, registerTimerHandler(register, remotePortClientMap));
+                        }
+                    }
+                });
+                webSocket.handler(buffer -> {
+                    //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为{
+                    byte msgType = buffer.getByte(0);
+                    JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
+                    if (jrpMsgType == null) {
+                        log.error("未知消息类型：{}", buffer);
+                        webSocket.close();
+                        return;
+                    }
+                    switch (jrpMsgType) {
+                        case REGISTER_RESULT: {
+                            try {
+                                RegisterResult registerResult = Json.decodeValue(buffer.getBuffer(1, buffer.length()), RegisterResult.class);
+                                if (registerResult.isSuccess()) {
+                                    this.closeAndCreateProxyHandler();
+                                    for (ClientProxy proxy : register.getProxies()) {
+                                        if (proxy.getType() != null) {
+                                            //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
+                                            String message;
+                                            String logMessage = "";
+                                            switch (proxy.getType()) {
+                                                case HTTP:
+                                                    message = "HTTP服务[%s]穿透后外网地址：[http://%s:%s]！";
+                                                    logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                    break;
+                                                case HTTPS:
+                                                    message = "HTTPS服务[{%s}]穿透后外网地址：[https://%s:%s]！";
+                                                    logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                    break;
+                                                case TCP:
+                                                    message = "TCP服务[{%s}]穿透后外网地址：[%s:%s]！";
+                                                    logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                    break;
+                                                case UDP:
+                                                    message = "UDP服务[{%s}]穿透后外网地址：[%s:%s]！";
+                                                    logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
+                                                    break;
+                                                case HTTP_PROXY:
+                                                    message = "HTTP代理服务穿透后外网地址：[http://%s:%s]！";
+                                                    logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                    break;
+                                                case HTTPS_PROXY:
+                                                    message = "HTTPS代理服务穿透后外网地址：[https://%s:%s]！";
+                                                    logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                    break;
+                                                case SOCKS4:
+                                                    message = "SOCKS4代理服务穿透后外网地址：[%s:%s]！";
+                                                    logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                    break;
+                                                case SOCKS5:
+                                                    message = "SOCKS5代理服务穿透后外网地址：[%s:%s]！";
+                                                    logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                    break;
+                                            }
+                                            log.info(logMessage);
+                                        }
+                                    }
+                                    clientProxyList = register.getProxies();
+                                    registerWebSocket = webSocket;
+                                    webSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
+                                    //发送ping
+                                    pingTimerId = vertx.setPeriodic(PING_DELAY, id -> {
+                                        if (pongReceived.get()) {
+                                            pongReceived.set(false);
+                                            webSocket.writePing(Buffer.buffer("ping")).timeout(1, TimeUnit.SECONDS).onFailure(cause -> {
+                                                log.error("ping失败：{}", cause.getMessage(), cause);
+                                                vertx.cancelTimer(id);
+                                                webSocket.close();
+                                            });
+                                        } else {
+                                            log.warn("未收到服务端[{}]pong消息！", registerWebSocket.remoteAddress().toString());
+                                        }
+                                    });
+                                    log.info("注册成功：\r\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
+                                    registerPromise.complete(true);
+                                } else {
+                                    registerWebSocket = null;
+                                    webSocket.close();
+                                    errorMessage = registerResult.getMsg();
+                                    log.error("注册失败：{}", errorMessage);
+                                    registerPromise.complete(false);
+                                }
+                            } catch (Throwable e) {
+                                webSocket.close();
+                                errorMessage = e.getMessage();
+                                log.error("注册异常：{}", errorMessage, e);
+                                registerPromise.complete(false);
+                            }
+                            break;
+                        }
+                        case CLOSE:
+                        case RECEIVE: {
+                            receiveData(remotePortClientMap, webSocket, buffer, msgType);
+                            break;
+                        }
+                    }
+                });
+
+                webSocket.exceptionHandler(err -> {
+                    log.error("websocket 连接异常：{}", err.getMessage(), err);
+                    webSocket.close();
+                    if (this.registerWebSocket == null) {
+                        registerPromise.complete(false);
+                    }
+                });
+                String registerInfo = Json.encodePrettily(register);
+                log.info("开始发送注册消息：\r\n{}", registerInfo);
+                webSocket.write(Buffer.buffer(JRPMsgType.REGISTER.codeArray()).appendBuffer(Buffer.buffer(registerInfo))).onComplete((rt) -> {
+                    if (rt.succeeded()) {
+                        log.info("发送注册消息成功，等待返回!");
+                    } else {
+                        errorMessage = rt.cause().getMessage();
+                        log.info("发送注册消息失败，error：{}", rt.cause().getMessage(), rt.cause());
+                        registerPromise.complete(false);
+                    }
+                });
+            } catch (Exception e) {
+                webSocket.close();
+                errorMessage = e.getMessage();
+                log.error("websocket 连接初始化异常：{}", e.getMessage(), e);
+                registerPromise.complete(false);
+            }
+        }, err -> {
+            //websocket初始化异常
+            errorMessage = err.getMessage();
+            log.error("websocket初始化异常：{}", err.getMessage(), err);
+            registerPromise.tryComplete(false);
+        });
+        //注册超时设置
+        vertx.setTimer(REGISTER_TIMEOUT, id -> {
+            if (registerPromise.tryComplete(false)) {
+                log.warn("websocket 注册超时！");
+                //关闭socket，避免超时重复注册时导致端口占用错误
+                WebSocket webSocket = currentWebSocket.get();
+                if (webSocket != null) {
+                    webSocket.close();
                 }
             }
-        } else {
-            result.set(true);
-        }
-        return result.get();
-
+        });
+        return registerPromise.future();
     }
 
+    /**
+     * 接收到服务端返回的消息
+     *
+     * @param remotePortClientMap 代理服务map
+     * @param webSocket           websocket隧道
+     * @param buffer              数据
+     * @param msgType             消息类型
+     */
+    private void receiveData(Map<Integer, ClientProxy> remotePortClientMap, WebSocket webSocket, Buffer buffer, byte msgType) {
+        //代理端口
+        Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_LEN).getUnsignedShort(0);
+        //请求唯一标识,代理端口之后开始取
+        Integer requestId = buffer.getBuffer(TYPE_PORT_LEN, TYPE_PORT_REQUEST_ID_LEN).getInt(0);
+        //获取消息标识：代理端口+请求id，消息类型之后取
+        Buffer msgId = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_REQUEST_ID_LEN);
+        //收到外网穿透服务器发送的客户端请求通知
+        Buffer data = buffer.getBuffer(TYPE_PORT_REQUEST_ID_LEN, buffer.length());
+        log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", requestId);
+        ClientProxy proxy = remotePortClientMap.get(remotePort);
+        switch (proxy.getType()) {
+            case HTTP:
+            case HTTPS:
+            case TCP:
+                tcpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
+                break;
+            case UDP:
+                udpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
+                break;
+            case HTTP_PROXY:
+            case HTTPS_PROXY:
+            case SOCKS4:
+            case SOCKS5:
+            case SMART_PROXY:
+                forwardProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
+                break;
+        }
+    }
+
+    /**
+     * 获取websocket客户端配置
+     *
+     * @return WebSocketClientOptions
+     */
     private WebSocketClientOptions getWebSocketClientOptions() {
         WebSocketClientOptions options = new WebSocketClientOptions();
         options.setTcpKeepAlive(true);
         options.setConnectTimeout(CONNECT_TIMEOUT);
         options.setIdleTimeout(IDLE_TIMEOUT);
+        //设置最大消息长度，4M
         options.setMaxMessageSize(BUFFER_SIZE * 2);
+        //设置最大帧长度，8M
         options.setMaxFrameSize(BUFFER_SIZE * 4);
+        //设置ssl
         options.setSsl(this.properties.getSsl());
         options.setTrustAll(true);
         options.setVerifyHost(false);
         return options;
-    }
-
-    /**
-     * 关闭socket
-     *
-     * @param close 是否调用registerWebSocket的关闭方法
-     * @return Future<Boolean> 关闭结果
-     */
-    private Future<Boolean> closeSocket(Boolean close) {
-        Promise<Boolean> promise = Promise.promise();
-        try {
-            if (pingTimerId != null) {
-                log.info("取消ping任务:{}", pingTimerId);
-                vertx.cancelTimer(pingTimerId);
-                pingTimerId = null;
-            }
-            this.closeProxySocket();
-//            if (!netSocketMap.isEmpty()) {
-//                log.info("停止TCP转发服务");
-//                netSocketMap.values().forEach(NetSocket::close);
-//                netSocketMap.clear();
-//            }
-//            if (!datagramSocketMap.isEmpty()) {
-//                log.info("停止UDP转发服务");
-//                datagramSocketMap.values().forEach(DatagramSocket::close);
-//                udpReadOrWriteTimeMap.clear();
-//            }
-            if (registerWebSocket != null && !registerWebSocket.isClosed() && close) {
-                log.info("关闭registerWebSocket");
-                registerWebSocket.close();
-            }
-        } catch (Exception e) {
-            log.error("closeWebSocket error：{}", e.getMessage(), e);
-        } finally {
-            registerWebSocket = null;
-//            netSocketMap.clear();
-//            datagramSocketMap.clear();
-//            udpReadOrWriteTimeMap.clear();
-            promise.complete();
-        }
-        return promise.future();
     }
 }
 

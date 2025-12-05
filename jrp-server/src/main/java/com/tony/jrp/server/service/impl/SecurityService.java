@@ -38,6 +38,10 @@ public class SecurityService implements InitializingBean {
     public static final String UTF_8 = "utf-8";
     //String wwwAuth = "Basic realm=\"Restricted Area\"";
     public static final String AUTHORIZATION = "Authorization";
+    /**
+     * 代理授权信息
+     */
+    public static final String PROXY_AUTHORIZATION = "Proxy-Authorization";
     private Pattern whitePattern;
     /**
      * 已授权主机列表和授权过期时间
@@ -114,6 +118,10 @@ public class SecurityService implements InitializingBean {
             if (line.startsWith(AUTHORIZATION)) {
                 //截取冒号“:”后的值
                 authorization = line.substring(AUTHORIZATION.length() + 1);
+                break;
+            } else if (line.startsWith(PROXY_AUTHORIZATION)) {
+                //截取冒号“:”后的值
+                authorization = line.substring(PROXY_AUTHORIZATION.length() + 1);
                 break;
             }
         }
@@ -192,6 +200,22 @@ public class SecurityService implements InitializingBean {
                 "Pragma: no-cache\r\n" +
                 "Expires: 0\r\n" +
                 "www-authenticate: " + getWWWAuthenticate(host) + "\r\n" +
+                "\r\n";
+    }
+
+    /**
+     * 返回http需要认证报文
+     * 407 Proxy Authentication Required
+     *
+     * @param host 主机名称、IP
+     * @return 认证报文
+     */
+    public String getHttpProxyAuthenticateResponse(String host) {
+        return "HTTP/1.1 407 Proxy Authentication Required\r\n" +
+                "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
+                "Pragma: no-cache\r\n" +
+                "Expires: 0\r\n" +
+                "Proxy-Authenticate: " + getWWWAuthenticate(host) + "\r\n" +
                 "\r\n";
     }
 

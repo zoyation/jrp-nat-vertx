@@ -15,5 +15,6 @@ public enum ServiceType implements Serializable {
     HTTP_PROXY,
     HTTPS_PROXY,
     SOCKS4,
-    SOCKS5
+    SOCKS5,
+    SMART_PROXY
 }

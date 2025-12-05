@@ -21,28 +21,43 @@ public class ForwardProxyRequest {
      */
     private SocksProxyProto proxyProto;
     /**
+     * 目标IP
+     */
+    private byte[] dstIP;
+    /**
      * 目标主机
      */
     private String targetHost;
     /**
      * 目标端口
      */
-    private int targetPort;
+    private byte[] targetPort;
 
     /**
      * 是否内网代理客户端创建连接是否成功
      */
-    private boolean tunnelStatus;
+    private boolean tunneled;
 
-    private ForwardProxyRequest(NetSocket socket, SocksProxyProto proxyProto, String targetHost, int targetPort) {
+    private ForwardProxyRequest(NetSocket socket, SocksProxyProto proxyProto, String targetHost, byte[] dstIP, byte[] targetPort) {
         this.socket = socket;
         this.proxyProto = proxyProto;
         this.targetHost = targetHost;
+        this.dstIP = dstIP;
         this.targetPort = targetPort;
     }
 
-    public static ForwardProxyRequest create(NetSocket socket, SocksProxyProto socksProxyProto, String targetHost, int targetPort) {
-        return new ForwardProxyRequest(socket, socksProxyProto, targetHost, targetPort);
+    /**
+     * 创建正向代理请求
+     *
+     * @param socket          用户客户端socket
+     * @param socksProxyProto 代理协议
+     * @param targetHost      目标主机
+     * @param dstIP           目标IP
+     * @param targetPort      目标端口
+     * @return 向代理请求信息
+     */
+    public static ForwardProxyRequest create(NetSocket socket, SocksProxyProto socksProxyProto, String targetHost, byte[] dstIP, byte[] targetPort) {
+        return new ForwardProxyRequest(socket, socksProxyProto, targetHost, dstIP, targetPort);
     }
 
     public Future<Void> close() {

@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Component
 @Slf4j
 public class ProxyServerManager implements InitializingBean {
-    public static final int IDLE_TIMEOUT = 10;
+    public static final int IDLE_TIMEOUT = 4;
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     /**
      * 上线
@@ -44,6 +44,7 @@ public class ProxyServerManager implements InitializingBean {
      * 下线
      */
     public static final int STATUS_OFFLINE = 2;
+    public static final int PING_DELAY = 2000;
     @Autowired
     protected Vertx vertx;
     /**
@@ -141,7 +142,7 @@ public class ProxyServerManager implements InitializingBean {
                                     log.debug("Pong received:{}", pongFrame.toString());
                                     pongReceived.set(true);
                                 });
-                                serverPing = vertx.setPeriodic(2000, id -> {
+                                serverPing = vertx.setPeriodic(PING_DELAY, id -> {
                                     if (pongReceived.get()) {
                                         pongReceived.set(false);
                                         serverWebSocket.writePing(Buffer.buffer("server ping"));
@@ -156,7 +157,7 @@ public class ProxyServerManager implements InitializingBean {
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
                                         reverseService.stop(remove.getProxies(), serverWebSocket)
-                                                .onSuccess(proxySuccess -> log.info("{}！", proxySuccess))
+                                                .onSuccess(proxySuccess -> log.info("{}", proxySuccess))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
                                         remove.setStatus(STATUS_OFFLINE);
                                         remove.setOffline_time(new Timestamp(System.currentTimeMillis()));

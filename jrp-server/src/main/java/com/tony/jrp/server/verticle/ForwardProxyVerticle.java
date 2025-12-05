@@ -62,6 +62,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     private static final byte SOCKS5_REPLY_SUCCEEDED = 0x00;
     // SOCKS5响应：通用失败
     private static final byte SOCKS5_REPLY_GENERAL_FAILURE = 0x01;
+    // SOCKS4 响应：成功
+    private static final byte SOCKS4_REPLY_SUCCEEDED = 0x5A;
     public static final String HOST_START = "Host: ";
     /**
      * 在类中添加UDP服务器映射
@@ -106,19 +108,19 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
         server.connectHandler(netSocket -> {
             netSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
             SocketAddress socketAddress = netSocket.remoteAddress();
-            log.debug("[{}] SOCKS5客户端连接!", socketAddress.toString());
+            log.debug("[{}]收到[{}]客户端连接!", socketAddress.toString(), clientProxy.getType().name());
             String clientAddress = socketAddress.toString();
             // 请求唯一标识
             int requestId = socketAddress.hashCode();
             // 连接关闭处理
             netSocket.closeHandler(voidHandler -> {
-                log.debug("SOCKS5客户端[{}]连接关闭！", clientAddress);
+                log.debug("代理客户端[{}]连接关闭！", clientAddress);
                 if (this.hasRequest(requestId)) {
                     this.removeCacheAndClose(requestId);
                     Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
                             .appendBytes(remotePortByte)
                             .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
-                    log.debug("SOCKS5客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
+                    log.debug("代理客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
                     serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length())
                             .appendByte(JRPMsgType.CLOSE.getCode())
                             .appendBuffer(msgId));
@@ -134,7 +136,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
             netSocket.exceptionHandler(err -> {
                 this.removeCacheAndClose(requestId);
                 netSocket.close();
-                log.error("SOCKS5客户端[{}]异常：{}！", clientAddress, err.getMessage(), err);
+                log.error("代理客户端[{}]异常：{}！", clientAddress, err.getMessage(), err);
             });
             // 设置http认证和协议处理器
             netSocket.handler(httpAuthAndProtocolHandler(netSocket));
@@ -142,9 +144,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
 
         server.listen(remotePort, res -> {
             if (res.succeeded()) {
-                log.info("SOCKS5内网穿透代理服务启动成功，代理端口：{}。", remotePort);
+                log.info("内网穿透代理服务启动成功，代理端口：{}。", remotePort);
             } else {
-                log.error("端口[{}]SOCKS5内网穿透代理服务启动失败：{}",
+                log.error("端口[{}]内网穿透代理服务启动失败：{}",
                         remotePort, res.cause().getMessage(), res.cause());
             }
         });
@@ -158,7 +160,13 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     /**
      * http认证和协议处理
      * 当穿透类型为socks4和socks5（无用户名、密码认证的socks5）时，需要先通过浏览器访问"http://代理ip:代理端口"进行认证，然后才能通过socks协议进行UDP、TCP转发，否则直接代理关闭连接。
-     * http代理也需要先进行http认证，基于host缓存认证信息。
+     * http代理也需要先进行http认证，基于host标识已经认证。
+     * 基于host标识认证信息存在问题：
+     * host（ip）是运营商动态的情况时，不固定(家庭网络运营商动态分配IP)，共用同一个外网IP的局域网其他设备也能访问
+     * 外网IP变化后，要重新认证，服务端不能感知到用户的外网IP变化，原来的认证信无法移除。
+     * 解决办法：
+     * 1.http请求可强制使用基于用户名、密码认证。
+     * 2.其他非HTTP请求，认证通过后，设置认证通过的host缓存有效期，超过有效期后，清除认证信息。
      *
      * @param socket 客户端socket
      * @return 处理器
@@ -166,11 +174,15 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     private Handler<Buffer> httpAuthAndProtocolHandler(NetSocket socket) {
         SocketAddress remoteAddress = socket.remoteAddress();
         return buffer -> {
+            int requestId = socket.hashCode();
+            Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
+                    .appendBytes(remotePortByte)
+                    .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
             //为提高安全性，增加http认证，基于host缓存认证信息。
             // socks5无认证（用户名、密码认证）时，需要先通过浏览器访问"http://代理ip:代理端口"进行认证，然后才能通过socks5协议进行UDP、TCP转发，否则直接代理关闭连接。
             boolean httpFlag = securityService.isHTTPRequest(buffer);
             if (httpFlag) {
-                //处理http认证
+                //处理http认证，本地测试时是127.0.0.1
                 String host = remoteAddress.host();
                 int remotePort = remoteAddress.port();
                 ///authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
@@ -180,9 +192,12 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 HttpMethod method = HttpMethod.valueOf(methodAndUrl[0]);
                 String url = methodAndUrl[1];
                 //是否为http认证请求，当url包括“:port”或者“:port/”，port为穿透代理外网端口，则表示为http认证请求
-                boolean authRequest = url.contains(":") && (url.endsWith(":" + clientProxy.getRemote_port()) || url.contains(":" + clientProxy.getRemote_port() + "/"));
+                boolean httpProxyAuthRequest = url.contains(":") && (url.endsWith(":" + clientProxy.getRemote_port()) || url.contains(":" + clientProxy.getRemote_port() + "/"));
+                if (!authorized) {
+                    log.debug("authData:{}", buffer.toString());
+                }
                 if (authorized || securityService.authorizeHttp(clientRegister, host, buffer)) {
-                    if (authRequest) {
+                    if (httpProxyAuthRequest) {
                         log.debug("[{}]正向代理穿透HTTP认证成功！", host);
                         //代理本身端口用于认证，认证成功返回
                         socket.end(Buffer.buffer(securityService.getOKResponse()));
@@ -215,7 +230,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         boolean proxy = false;
                         // 提取目标主机和端口示例逻辑
                         String targetHost = null;
-                        Integer targetPort = null;
+                        int targetPort = -1;
                         while (requestLines.hasMoreTokens()) {
                             String requestLine = requestLines.nextToken();
                             if (requestLine.startsWith("Proxy-Connection")) {
@@ -241,10 +256,11 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                             }
                         }
                         if (proxy && targetHost != null) {
+                            //重新设置tcp数据接收处理器
+                            socket.handler(dataHandler(msgId));
                             //转发请求
                             log.debug("转发来自[{}]的正向代理穿透HTTP请求到内网客户端！", remoteAddress);
-                            //http代理协议，建立http或https穿透连接
-                            this.sendConnectInfo(socket, HttpMethod.CONNECT == method ? SocksProxyProto.HTTPS : SocksProxyProto.HTTP, targetHost, targetPort);
+                            this.sendConnectInfo(socket, requestId, msgId, HttpMethod.CONNECT == method ? SocksProxyProto.HTTPS : SocksProxyProto.HTTP, targetHost, null, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array(), buffer);
                         } else {
                             log.warn("关闭来自[{}]的非正向代理穿透请求！", remoteAddress);
                             socket.end(Buffer.buffer(securityService.getOKResponse()));
@@ -252,10 +268,10 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         }
                     }
                 } else {
-                    if (authRequest) {
+                    if (httpProxyAuthRequest) {
                         log.warn("[{}]未授权访问代理:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
                         // 将重定向响应写入socket
-                        socket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
+                        socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
                         socket.close();
                     } else {
                         log.warn("[{}]未授权访问穿透代理，直接关闭！", remoteAddress);
@@ -263,7 +279,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     }
                 }
             } else {
-                //判断是否为sock4、sock5代理协议
+                //判断是否为sock4、sock4a、sock5代理协议
                 if (buffer.length() < 2) {
                     log.warn("握手请求报文不正确：{}", remoteAddress);
                     socket.close();
@@ -276,7 +292,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     //获取CD 1字节 操作代码，连接请求值为1
                     byte cmd = buffer.getByte(1);
                     //获取DSTPORT	2字节	目标服务器的端口号
-                    int targetPort = ((buffer.getByte(2) & 0xFF) << 8) | (buffer.getByte(3) & 0xFF);
+                    byte[] targetPort = buffer.getBytes(2, 4);
                     //获取DSTIP	4字节	目标服务器的IP地址
                     StringBuilder ipBuilder = new StringBuilder();
                     for (int i = 0; i < 4; i++) {
@@ -285,10 +301,21 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     }
 
                     String dstIP = ipBuilder.toString();
+                    byte[] dstIPByte = buffer.getBytes(4, 8);
                     //通过dstIP判断是否为socks4a协议
-                    // socks4a协议格式：0x04（版本）+ 0x01（CONNECT命令）+ 目标端口（2字节）+ 目标IP（4字节，通常填0.0.0.1）+ 域名（以NULL结尾）+ 用户ID（以NULL结尾）
-                    boolean socks4a = dstIP.startsWith("0.0.0.");
+                    // socks4a协议格式：0x04（版本，1字节）+ 0x01（CONNECT命令，1字节）+ 目标端口（2字节）+ 目标IP（4字节，通常填0.0.0.1）+ 用户ID（以NULL结尾）+ 域名
+                    //VERSION(1) + CD(1) + DSTPORT(2) + DSTIP(4) + USERID(NULL terminated) + DOMAIN(NULL terminated)
+                    boolean socks4a = dstIP.equals("0.0.0.1");
                     StringBuilder domainBuilder = new StringBuilder();
+                    //获取USERID
+                    StringBuilder userIdBuilder = new StringBuilder();
+                    for (int i = 8; i < buffer.length(); i++) {
+                        if (buffer.getByte(i) == 0) {
+                            break;
+                        }
+                        userIdBuilder.append((char) buffer.getByte(i));
+                    }
+                    String userId = userIdBuilder.toString();
                     if (socks4a) {
                         for (int i = 8; i < buffer.length(); i++) {
                             if (buffer.getByte(i) == 0) {
@@ -296,23 +323,22 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                             }
                             domainBuilder.append((char) buffer.getByte(i));
                         }
-                        //比如www.example.com
-                        String domain = domainBuilder.toString();
-                        log.debug("来自[{}]的SOCKS4a代理穿透请求，目标域名为：{}", remoteAddress, domain);
-                    }
-                    //获取USERID
-                    StringBuilder userIdBuilder = new StringBuilder();
-                    for (int i = 8 + (socks4a ? domainBuilder.length() + 1 : 0); i < buffer.length(); i++) {
-                        if (buffer.getByte(i) == 0) {
-                            break;
+                        if (8 + userId.length() + 1 < buffer.length()) {
+                            for (int i = userId.length() + 1; i < buffer.length(); i++) {
+                                if (buffer.getByte(i) == 0) {
+                                    break;
+                                }
+                                domainBuilder.append((char) buffer.getByte(i));
+                            }
                         }
-                        userIdBuilder.append((char) buffer.getByte(i));
+                        //比如www.example.com
+                        log.debug("来自[{}]的SOCKS4a代理穿透请求，目标域名为：{}", remoteAddress, domainBuilder);
                     }
-                    String userId = userIdBuilder.toString();
+
                     if (clientRegister.getUsername().equals(userId)) {
                         log.debug("来自[{}]的SOCKS4代理穿透请求认证通过！", remoteAddress);
                         String targetHost = socks4a ? domainBuilder.toString() : dstIP;
-                        sendConnectInfo(socket, SocksProxyProto.SOCK4A_TCP, targetHost, targetPort);
+                        sendConnectInfo(socket, requestId, msgId, SocksProxyProto.SOCK4A_TCP, targetHost, dstIPByte, targetPort, Buffer.buffer());
                     } else {
                         log.warn("来自[{}]的SOCKS4代理穿透请求认证失败！", remoteAddress);
                         socket.close();
@@ -350,10 +376,10 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     socket.write(Buffer.buffer(new byte[]{SOCKS5_VERSION, selectedMethod}));
                     if (selectedMethod == SOCKS5_AUTH_METHOD_USERNAME_PASSWORD) {
                         // 切换到用户名密码认证处理阶段
-                        socket.handler(socks5AuthHandler(socket));
+                        socket.handler(socks5AuthHandler(socket, msgId));
                     } else {
                         // 无需认证，尝试和内网建立连接
-                        socket.handler(socks5RequestHandler(socket));
+                        socket.handler(socks5RequestHandler(socket, msgId));
                     }
                 } else {
                     log.warn("socks协议版本号不匹配：{}", remoteAddress);
@@ -366,10 +392,11 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     /**
      * 3.SOCKS5请求处理处理器：尝试和内网建立连接
      *
-     * @param clientSocket SOCKS5客户端socket
+     * @param clientSocket 代理客户端socket
+     * @param msgId        消息ID
      * @return 处理器
      */
-    private Handler<Buffer> socks5RequestHandler(NetSocket clientSocket) {
+    private Handler<Buffer> socks5RequestHandler(NetSocket clientSocket, Buffer msgId) {
         return buffer -> {
             if (buffer.length() < 7) {
                 sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> clientSocket.close());
@@ -395,9 +422,10 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
             }
             try {
                 //目标地址。取决于 ATYP。
+                byte[] dstIP = null;
                 String targetHost;
                 //目标端口（大端序）
-                int targetPort;
+                byte[] targetPort;
                 //int addrLength;
                 if (addrType == SOCKS5_ADDR_TYPE_IPV4) {
                     // IPv4地址
@@ -410,8 +438,12 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         if (i > 0) ipBuilder.append(".");
                         ipBuilder.append(buffer.getByte(4 + i) & 0xFF);
                     }
+                    dstIP = buffer.getBytes(4, 8);
                     targetHost = ipBuilder.toString();
-                    targetPort = ((buffer.getByte(8) & 0xFF) << 8) | (buffer.getByte(9) & 0xFF);
+                    //byte b = -1;  // 在二进制中表示为 11111111
+                    //int result = b & 0xFF;  // 结果是 255 (00000000 00000000 00000000 11111111)
+                    //targetPort = ((buffer.getByte(8) & 0xFF) << 8) | (buffer.getByte(9) & 0xFF);
+                    targetPort = buffer.getBytes(8, 10);
                     //addrLength = 10;
                 } else if (addrType == SOCKS5_ADDR_TYPE_DOMAIN) {
                     // 域名地址
@@ -421,8 +453,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         return;
                     }
                     targetHost = buffer.getString(5, 5 + domainLength);
-                    targetPort = ((buffer.getByte(5 + domainLength) & 0xFF) << 8) |
-                            (buffer.getByte(6 + domainLength) & 0xFF);
+                    targetPort = buffer.getBytes(5 + domainLength, 5 + domainLength + 2);
                     //addrLength = 7 + domainLength;
                 } else {
                     sendSocks5Reply(clientSocket, SOCKS5_REPLY_GENERAL_FAILURE).onComplete(voidHandler -> clientSocket.close());
@@ -437,7 +468,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     if (socksProxyProto == SocksProxyProto.SOCK5_UDP) {
                         //添加UDP代理
                     }
-                    sendConnectInfo(clientSocket, socksProxyProto, targetHost, targetPort);
+                    sendConnectInfo(clientSocket, clientSocket.hashCode(), msgId, socksProxyProto, targetHost, dstIP, targetPort, Buffer.buffer());
+                    //sendConnectInfo(clientSocket, socksProxyProto, targetHost, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array());
                 }
             } catch (Exception e) {
                 log.error("处理SOCKS5请求失败:{}", e.getMessage(), e);
@@ -449,32 +481,34 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     /**
      * 发送连接信息给内网代理程序，并缓存连接
      *
-     * @param clientSocket    SOCKS5客户端socket
+     * @param clientSocket    代理客户端socket
+     * @param requestId       请求ID
+     * @param msgId           消息ID
      * @param socksProxyProto 代理协议
      * @param targetHost      目标地址
+     * @param dstIP           目标IP
      * @param targetPort      目标端口
+     * @param httpData        http代理数据
      */
-    private void sendConnectInfo(NetSocket clientSocket, SocksProxyProto socksProxyProto, String targetHost, int targetPort) {
-        int requestId = clientSocket.hashCode();
+    private void sendConnectInfo(NetSocket clientSocket, Integer requestId, Buffer msgId, SocksProxyProto socksProxyProto, String targetHost, byte[] dstIP, byte[] targetPort, Buffer httpData) {
         // 通知内网代理建立连接
-        byte[] portBytes = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array();
-        Buffer target = Buffer.buffer(1 + targetHost.length() + 1 + portBytes.length)
+        Buffer target = Buffer.buffer(1 + targetHost.length() + 1 + targetPort.length)
                 .appendByte(socksProxyProto.getProto())
                 .appendString(targetHost)
                 .appendByte((byte) ':')
-                .appendBytes(portBytes);
-        Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
-                .appendBytes(remotePortByte)
-                .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
-        this.cacheRequest(requestId, ForwardProxyRequest.create(clientSocket, socksProxyProto, targetHost, targetPort));
+                .appendBytes(targetPort);
+        ForwardProxyRequest proxyRequest = ForwardProxyRequest.create(clientSocket, socksProxyProto, targetHost, dstIP, targetPort);
+        this.cacheRequest(requestId, proxyRequest);
         //转发连接信息给穿透客户端
         this.serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
                 .appendByte(JRPMsgType.RECEIVE.getCode())
                 .appendBuffer(msgId)
-                .appendBuffer(target));
+                .appendBuffer(target).appendBuffer(httpData));
         //1秒后没收到创建连接成功消息，关闭连接
         vertx.setTimer(1000, id -> {
-            this.removeCacheAndClose(requestId);
+            if (!proxyRequest.isTunneled()) {
+                this.removeCacheAndClose(requestId);
+            }
         });
     }
 
@@ -483,12 +517,31 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
      */
     private Handler<Buffer> dataHandler(Buffer msgId) {
         return buffer -> {
-            // 将SOCKS5客户端加入管理
+            // 将代理客户端加入管理
             serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + buffer.length())
                     .appendByte(JRPMsgType.RECEIVE.getCode())
                     .appendBuffer(msgId)
                     .appendBuffer(buffer));
         };
+    }
+
+    /**
+     * 发送SOCKS4响应
+     *
+     * @param socket    SOCKS4客户端socket
+     * @param replyCode 回复码 1字节
+     * @param dstPort   目标端口 2字节
+     * @param dstIP     目标IP 4字节
+     * @return 返回结果
+     */
+    private Future<Void> sendSocks4Reply(NetSocket socket, byte replyCode, byte[] dstPort, byte[] dstIP) {
+        Buffer reply = Buffer.buffer(8)
+                .appendBytes(new byte[]{
+                        0x00,      // 版本 1字节
+                        replyCode // 状态码，0x5A表示请求成功‌，0x5B-0x5F（失败）
+                }).appendBytes(dstPort)
+                .appendBytes(dstIP);
+        return socket.write(reply);
     }
 
     /**
@@ -508,8 +561,12 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
 
     /**
      * 2.用户名密码认证处理器
+     *
+     * @param clientSocket 代理客户端socket
+     * @param msgId        认证消息ID
+     * @return 处理器
      */
-    private Handler<Buffer> socks5AuthHandler(NetSocket clientSocket) {
+    private Handler<Buffer> socks5AuthHandler(NetSocket clientSocket, Buffer msgId) {
         return buffer -> {
             if (buffer.length() < 3) {
                 clientSocket.close();
@@ -547,7 +604,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 // 发送成功响应
                 sendSocks5AuthReply(clientSocket, SOCKS5_AUTH_SUCCESS);
                 // 成功后请求处理
-                clientSocket.handler(socks5RequestHandler(clientSocket));
+                clientSocket.handler(socks5RequestHandler(clientSocket, msgId));
             } else {
                 // 发送失败响应
                 sendSocks5AuthReply(clientSocket, SOCKS5_AUTH_FAILURE);
@@ -670,7 +727,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 log.debug("收到内网代理服务返回的关闭信息[{}]，关闭SOCKS5连接。", clientAddress);
                 this.removeCacheAndClose(requestId);
             } else if (JRPMsgType.RESPONSE == msgType) {
-                log.debug("收到内网代理服务返回数据并返回给SOCKS5客户端[{}]。", clientAddress);
+                log.debug("收到内网代理服务返回数据并返回给代理客户端[{}]。", clientAddress);
                 //SOCK5_TCP或SOCK4_TCP穿透客户端创建TCP连接成功后会返回空消息(realData.length()==0)
                 if (realData.length() == 0) {
                     //接收和转发来自用户端的数据
@@ -679,10 +736,26 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         // 发送socks5穿透隧道创建成功响应
                         log.debug("穿透客户端创建TCP连接成功，发送socks5 TCP隧道创建成功响应。");
                         sendSocks5Reply(clientNetSocket, SOCKS5_REPLY_SUCCEEDED).onSuccess(done -> {
-                            proxyRequest.setTunnelStatus(true);
+                            proxyRequest.setTunneled(true);
                         });
+                    } else if (SocksProxyProto.SOCK4_TCP == proxyProto || SocksProxyProto.SOCK4A_TCP == proxyProto) {
+                        // 发送socks4穿透隧道创建成功响应
+                        log.debug("穿透客户端创建TCP连接成功，发送socks4 TCP隧道创建成功响应。");
+                        //返回socks4连接成功响应，组装sock4响应消息
+                        /*
+                        VN (1字节): 协议版本，固定为0x00
+                        CD (1字节): 状态码，0x5A表示请求成功
+                        DSTPORT (2字节): 目标端口（大端序）
+                        DSTIP (4字节): 目标IP地址
+                       */
+                        sendSocks4Reply(clientNetSocket, SOCKS4_REPLY_SUCCEEDED, proxyRequest.getTargetPort(), proxyRequest.getDstIP()).onSuccess(done -> {
+                            proxyRequest.setTunneled(true);
+                        });
+                    } else if (SocksProxyProto.HTTP == proxyProto || SocksProxyProto.HTTPS == proxyProto) {
+                        proxyRequest.setTunneled(true);
                     }
                 } else {
+                    proxyRequest.setTunneled(true);
                     clientNetSocket.write(realData);
                     if (clientNetSocket.writeQueueFull()) {
                         clientNetSocket.pause();
@@ -693,9 +766,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", clientAddress, msgType);
             }
         } else if (JRPMsgType.CLOSE == msgType) {
-            log.warn("收到内网代理服务返回的关闭消息，SOCKS5客户端[{}]连接已经失效，不做处理！", requestId);
+            log.warn("收到内网代理服务返回的关闭消息，代理客户端[{}]连接已经失效，不做处理！", requestId);
         } else {
-            log.warn("收到内网代理服务返回消息，但是SOCKS5客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", requestId);
+            log.warn("收到内网代理服务返回消息，但是代理客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", requestId);
             serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length())
                     .appendByte(JRPMsgType.CLOSE.getCode())
                     .appendBuffer(msgId));

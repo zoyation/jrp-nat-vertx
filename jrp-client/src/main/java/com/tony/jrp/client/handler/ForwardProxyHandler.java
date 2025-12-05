@@ -14,7 +14,10 @@ import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.Map;
+import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
@@ -103,7 +106,8 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         }
                         targetHost.append((char) data.getByte(i));
                     }
-                    int targetPort = data.getBuffer(1 + targetHost.length() + 1, data.length()).getUnsignedShort(0);
+                    int targetPort = data.getBuffer(1 + targetHost.length() + 1, 1 + targetHost.length() + 1 + 2).getUnsignedShort(0);
+                    Buffer httpData = (protocol == SocksProxyProto.HTTP || protocol == SocksProxyProto.HTTPS) ? data.getBuffer(1 + targetHost.length() + 1 + 2, data.length()) : Buffer.buffer();
                     final SocketAddress socketAddress = SocketAddress.inetSocketAddress(targetPort, targetHost.toString());
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, targetHost, targetPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
@@ -139,8 +143,47 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                             log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
                                         }
                                     });
-                                    webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
                                     log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
+                                    webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
+                                    if (httpData.length() > 0) {
+                                        StringTokenizer tokenizer = new StringTokenizer(httpData.toString(), "\r\n");
+                                        boolean https;
+                                        if (tokenizer.hasMoreTokens()) {
+                                            //第一行是请求行，正向代理转发过来的格式为：CONNECT http://192.168.1.11:88/index.html HTTP/1.1\r\n
+                                            //或者 GET http://192.168.1.11:88/index.html HTTP/1.1\r\n
+                                            String firstLine = tokenizer.nextToken();
+                                            String[] request = firstLine.split(" ");
+                                            if (request.length == 3) {
+                                                //http://192.168.1.11:88/index.html
+                                                String method = request[0];
+                                                String url = request[1];
+                                                https = method.equals("CONNECT");
+                                                URL absoluteUrl;
+                                                try {
+                                                    absoluteUrl = new URL(https ? ("https://" + url) : url);
+                                                } catch (MalformedURLException e) {
+                                                    log.error("URL解析异常:{}！", firstLine);
+                                                    throw new RuntimeException(e);
+                                                }
+                                                String uri;
+                                                if (url.startsWith("connection: upgrade")) {
+                                                    uri = url;
+                                                } else {
+                                                    uri = absoluteUrl.getFile();
+                                                }
+                                                //第一行替换“http://192.168.1.11:88/index.html”为“/index.html”
+                                                Buffer requestFirestLine = Buffer.buffer(firstLine.replace(url, uri));
+                                                Buffer otherBuffer = httpData.getBuffer(firstLine.length(), httpData.length());
+                                                Buffer receiveData = Buffer.buffer(requestFirestLine.length() + otherBuffer.length()).appendBuffer(requestFirestLine).appendBuffer(otherBuffer);
+                                                sendTcpData(receiveData, proxySocket);
+                                            } else {
+                                                log.warn("请求消息格式不正确：{}", firstLine);
+                                            }
+                                        } else {
+                                            throw new RuntimeException("无法解析请求！");
+                                        }
+                                    }
+
                                 }
                             } else {
                                 log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());
