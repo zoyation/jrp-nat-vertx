@@ -9,7 +9,6 @@ import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.ServerWebSocket;
-import io.vertx.core.impl.ConcurrentHashSet;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -17,7 +16,6 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -49,19 +47,26 @@ public class TraversalServiceImpl implements ITraversalService {
      * 所有代理信息
      */
     private final Map<String, RegisterTraversalVerticle> verticleMap = new ConcurrentHashMap<>();
-    /**
-     * 所有已使用端口
-     */
-    private final Set<Integer> allPorts = new ConcurrentHashSet<>();
 
     @Override
     public synchronized Future<Boolean> start(ClientRegister clientRegister, ServerWebSocket webSocket) {
         List<ClientProxy> proxies = clientRegister.getProxies();
-        //进行端口检查，如果端口被占用了，提示不能使用
         return vertx.executeBlocking(() -> {
+            //停止上次的代理
+            verticleMap.forEach((key, traversalVerticle) -> {
+                if (traversalVerticle.getClientRegister().getId().equals(clientRegister.getId())) {
+                    vertx.undeploy(traversalVerticle.deploymentID());
+                }
+            });
+            verticleMap.entrySet().removeIf(entry -> {
+                boolean remove = entry.getValue().getClientRegister().getId().equals(clientRegister.getId());
+                vertx.undeploy(entry.getValue().deploymentID());
+                return remove;
+            });
+            //进行端口检查，如果端口被占用了，提示不能使用
             List<String> usedPort = new ArrayList<>();
             for (ClientProxy clientProxy : proxies) {
-                if (allPorts.contains(clientProxy.getRemote_port()) || clientProxy.getRemote_port() < MIN_PORT || clientProxy.getRemote_port() > MAX_PORT || !PortChecker.isUsable(clientProxy.getRemote_port())) {
+                if (clientProxy.getRemote_port() < MIN_PORT || clientProxy.getRemote_port() > MAX_PORT || !PortChecker.isUsable(clientProxy.getRemote_port())) {
                     usedPort.add(String.valueOf(clientProxy.getRemote_port()));
                 }
             }
@@ -73,7 +78,6 @@ public class TraversalServiceImpl implements ITraversalService {
                 try {
                     final RegisterTraversalVerticle verticle = new RegisterTraversalVerticle(clientRegister, webSocket, securityService);
                     verticleMap.put(webSocket.textHandlerID(), verticle);
-                    proxies.forEach(r -> allPorts.add(r.getRemote_port()));
                     vertx.deployVerticle(verticle).onSuccess(id -> {
                         result.set(true);
                         countDownLatch.countDown();
@@ -105,7 +109,6 @@ public class TraversalServiceImpl implements ITraversalService {
     public Future<String> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
         Promise<String> promise = Promise.promise();
         if (clientProxyList != null) {
-            clientProxyList.forEach(r -> allPorts.remove(r.getRemote_port()));
             RegisterTraversalVerticle clientReverseProxyVerticle = verticleMap.remove(webSocket.textHandlerID());
             if (clientReverseProxyVerticle != null) {
                 try {

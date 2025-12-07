@@ -93,7 +93,7 @@ public class SecurityService implements InitializingBean {
      * @param data           http文本信息
      * @return 是否授权通过
      */
-    public boolean authorizeHttp(ClientRegister clientRegister, String host, Buffer data) {
+    public boolean authorizeHttp(ClientRegister clientRegister, String host, Buffer data, boolean httpProxy) {
         if (data == null) {
             return false;
         }
@@ -115,14 +115,18 @@ public class SecurityService implements InitializingBean {
         }
         for (int i = 1; i < httpArr.length; i++) {
             String line = httpArr[i];
-            if (line.startsWith(AUTHORIZATION)) {
-                //截取冒号“:”后的值
-                authorization = line.substring(AUTHORIZATION.length() + 1);
-                break;
-            } else if (line.startsWith(PROXY_AUTHORIZATION)) {
-                //截取冒号“:”后的值
-                authorization = line.substring(PROXY_AUTHORIZATION.length() + 1);
-                break;
+            if (httpProxy) {
+                if (line.startsWith(PROXY_AUTHORIZATION)) {
+                    //截取冒号“:”后的值
+                    authorization = line.substring(PROXY_AUTHORIZATION.length() + 1);
+                    break;
+                }
+            } else {
+                if (line.startsWith(AUTHORIZATION)) {
+                    //截取冒号“:”后的值
+                    authorization = line.substring(AUTHORIZATION.length() + 1);
+                    break;
+                }
             }
         }
         if (authorization == null) {
@@ -137,6 +141,16 @@ public class SecurityService implements InitializingBean {
         } catch (UnsupportedEncodingException e) {
             return false;
         }
+    }
+
+    /**
+     * @param clientRegister 客户端注册信息
+     * @param host           主机
+     * @param data           http文本信息
+     * @return 是否授权通过
+     */
+    public boolean authorizeHttp(ClientRegister clientRegister, String host, Buffer data) {
+        return authorizeHttp(clientRegister, host, data, false);
     }
 
     /**

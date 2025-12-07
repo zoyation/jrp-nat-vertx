@@ -460,19 +460,19 @@ public class ProxyClientManager implements InitializingBean {
                                         }
                                     });
                                     log.info("注册成功：\r\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
-                                    registerPromise.complete(true);
+                                    registerPromise.tryComplete(true);
                                 } else {
                                     registerWebSocket = null;
                                     webSocket.close();
                                     errorMessage = registerResult.getMsg();
                                     log.error("注册失败：{}", errorMessage);
-                                    registerPromise.complete(false);
+                                    registerPromise.tryComplete(false);
                                 }
                             } catch (Throwable e) {
                                 webSocket.close();
                                 errorMessage = e.getMessage();
                                 log.error("注册异常：{}", errorMessage, e);
-                                registerPromise.complete(false);
+                                registerPromise.tryComplete(false);
                             }
                             break;
                         }

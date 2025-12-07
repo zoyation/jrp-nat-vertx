@@ -174,12 +174,14 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     private Handler<Buffer> httpAuthAndProtocolHandler(NetSocket socket) {
         SocketAddress remoteAddress = socket.remoteAddress();
         return buffer -> {
+            //log.debug("收到[{}]客户端数据[{}]！", remoteAddress.toString(), buffer.toString());
             int requestId = socket.hashCode();
             Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
                     .appendBytes(remotePortByte)
                     .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
             //为提高安全性，增加http认证，基于host缓存认证信息。
             // socks5无认证（用户名、密码认证）时，需要先通过浏览器访问"http://代理ip:代理端口"进行认证，然后才能通过socks5协议进行UDP、TCP转发，否则直接代理关闭连接。
+            //Proxy-Authorization: Digest 
             boolean httpFlag = securityService.isHTTPRequest(buffer);
             if (httpFlag) {
                 //处理http认证，本地测试时是127.0.0.1
@@ -191,42 +193,16 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 String[] methodAndUrl = buffer.toString().split(" ", 3);
                 HttpMethod method = HttpMethod.valueOf(methodAndUrl[0]);
                 String url = methodAndUrl[1];
-                //是否为http认证请求，当url包括“:port”或者“:port/”，port为穿透代理外网端口，则表示为http认证请求
+                //是否为http认证请求，当url包括“:port”或者“:port/”，port为穿透代理外网端口，则表示为http代理认证请求
                 boolean httpProxyAuthRequest = url.contains(":") && (url.endsWith(":" + clientProxy.getRemote_port()) || url.contains(":" + clientProxy.getRemote_port() + "/"));
-                if (!authorized) {
-                    log.debug("authData:{}", buffer.toString());
-                }
-                if (authorized || securityService.authorizeHttp(clientRegister, host, buffer)) {
+                if (authorized || securityService.authorizeHttp(clientRegister, host, buffer, true)) {
                     if (httpProxyAuthRequest) {
                         log.debug("[{}]正向代理穿透HTTP认证成功！", host);
                         //代理本身端口用于认证，认证成功返回
                         socket.end(Buffer.buffer(securityService.getOKResponse()));
-                        socket.close();
                     } else {
-                        /*
-                         如果是http和https代理协议报文，按http代理转发
-                         CONNECT substrate.office.com:443 HTTP/1.0
-                         Host: substrate.office.com:443
-                         Content-Length: 0
-                         Proxy-Connection: Keep-Alive
-                         Pragma: no-cache
-                         /r/n
-                         /r/n
-                         */
-                        //http报文：
-                        //GET http://192.168.1.13:1081/ HTTP/1.1
-                        //Host: 192.168.1.13:1081
-                        //Proxy-Connection: keep-alive
-                        //Upgrade-Insecure-Requests: 1
-                        //User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0
-                        //Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7
-                        //Accept-Encoding: gzip, deflate
-                        //Accept-Language: zh-CN,zh;q=0.9
-                        ///r/n
-                        ///r/n
                         //判断是否包含Proxy-Connection请求头，如果包含，是http代理协议请求，建立http代理协议穿透连接
                         StringTokenizer requestLines = new StringTokenizer(buffer.toString(), "\r\n");
-                        //判断是否包含Proxy-Connection请求头，如果包含，是http代理协议请求，建立http代理协议穿透连接
                         boolean proxy = false;
                         // 提取目标主机和端口示例逻辑
                         String targetHost = null;
@@ -264,19 +240,12 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         } else {
                             log.warn("关闭来自[{}]的非正向代理穿透请求！", remoteAddress);
                             socket.end(Buffer.buffer(securityService.getOKResponse()));
-                            socket.close();
                         }
                     }
                 } else {
-                    if (httpProxyAuthRequest) {
-                        log.warn("[{}]未授权访问代理:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
-                        // 将重定向响应写入socket
-                        socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
-                        socket.close();
-                    } else {
-                        log.warn("[{}]未授权访问穿透代理，直接关闭！", remoteAddress);
-                        socket.close();
-                    }
+                    log.warn("[{}]未授权访问:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
+                    // 将重定向响应写入socket
+                    socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
                 }
             } else {
                 //判断是否为sock4、sock4a、sock5代理协议
