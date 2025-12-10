@@ -1,6 +1,7 @@
 package com.tony.jrp.server.verticle;
 
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.enums.SocksProxyProto;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
@@ -16,6 +17,7 @@ import io.vertx.core.net.NetServerOptions;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.net.SocketAddress;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.StringUtils;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -65,19 +67,20 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     // SOCKS4 响应：成功
     private static final byte SOCKS4_REPLY_SUCCEEDED = 0x5A;
     public static final String HOST_START = "Host: ";
+    public static final String PROXY_CONNECTION = "Proxy-Connection";
     /**
      * 在类中添加UDP服务器映射
      */
     private final Map<String, NetServer> udpServerMap = new ConcurrentHashMap<>();
 
     /**
-     * 创建TCP服务器用于SOCKS5
+     * 创建TCP服务器用于http代理、SOCKS代理穿透
      */
     private NetServer server;
     /**
-     * socks5监听端口对应字节
+     * 代理监听端口对应大端序字节
      */
-    byte[] remotePortByte;
+    private final byte[] remotePortByte;
 
     // 在类中添加UDP端口分配方法
     private int allocateUdpPort() {
@@ -99,7 +102,11 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
         Integer remotePort = clientProxy.getRemote_port();
         // 创建TCP服务器用于SOCKS5
         NetServerOptions options = new NetServerOptions();
-        options.setIdleTimeout(IDLE_TIMEOUT);
+//        options.setIdleTimeout(IDLE_TIMEOUT);
+        options.setTcpKeepAlive(true);
+        options.setTcpNoDelay(true);
+        options.setTcpFastOpen(true);
+        //options.setClientAuth(ClientAuth.REQUIRED);
         options.setReceiveBufferSize(BUFFER_SIZE);
         options.setSendBufferSize(BUFFER_SIZE);
         //TCP监听
@@ -108,18 +115,19 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
         server.connectHandler(netSocket -> {
             netSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
             SocketAddress socketAddress = netSocket.remoteAddress();
-            log.debug("[{}]收到[{}]客户端连接!", socketAddress.toString(), clientProxy.getType().name());
+            log.debug("收到代理连接，客户端地址[{}]，连接类型[{}]!", socketAddress.toString(), clientProxy.getType().name());
             String clientAddress = socketAddress.toString();
             // 请求唯一标识
             int requestId = socketAddress.hashCode();
+            // 消息唯一标识 端口+请求ID，6字节
+            Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
+                    .appendBytes(remotePortByte)
+                    .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
             // 连接关闭处理
             netSocket.closeHandler(voidHandler -> {
                 log.debug("代理客户端[{}]连接关闭！", clientAddress);
-                if (this.hasRequest(requestId)) {
+                if (this.cacheRequest(requestId)) {
                     this.removeCacheAndClose(requestId);
-                    Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
-                            .appendBytes(remotePortByte)
-                            .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
                     log.debug("代理客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
                     serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length())
                             .appendByte(JRPMsgType.CLOSE.getCode())
@@ -158,15 +166,17 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     }
 
     /**
-     * http认证和协议处理
-     * 当穿透类型为socks4和socks5（无用户名、密码认证的socks5）时，需要先通过浏览器访问"http://代理ip:代理端口"进行认证，然后才能通过socks协议进行UDP、TCP转发，否则直接代理关闭连接。
-     * http代理也需要先进行http认证，基于host标识已经认证。
+     * http认证和代理协议处理器
+     * 当穿透类型为socks5用户名、密码认证时，socks5客户端按socks5协议进行用户名密码认证，然后才能通过socks协议进行UDP、TCP转发，否则直接代理关闭连接。
+     * 当穿透类型为socks4和socks5（无用户名、密码认证的socks5）时，需要先浏览器访问"http://代理ip:代理端口"进行认证，服务端基于host标识认证信息，然后才能通过socks协议进行UDP、TCP转发，否则直接代理关闭连接。
+     * http代理需要浏览器访问"http://代理ip:代理端口"进行认证。
+     * <p>
      * 基于host标识认证信息存在问题：
      * host（ip）是运营商动态的情况时，不固定(家庭网络运营商动态分配IP)，共用同一个外网IP的局域网其他设备也能访问
      * 外网IP变化后，要重新认证，服务端不能感知到用户的外网IP变化，原来的认证信无法移除。
      * 解决办法：
      * 1.http请求可强制使用基于用户名、密码认证。
-     * 2.其他非HTTP请求，认证通过后，设置认证通过的host缓存有效期，超过有效期后，清除认证信息。
+     * 2.socks4和socks5(无用户名、密码认证的socks5)通过http认证通过后，设置认证通过的host缓存有效期，超过有效期后，清除认证信息。
      *
      * @param socket 客户端socket
      * @return 处理器
@@ -179,12 +189,13 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
             Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
                     .appendBytes(remotePortByte)
                     .appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
-            //为提高安全性，增加http认证，基于host缓存认证信息。
-            // socks5无认证（用户名、密码认证）时，需要先通过浏览器访问"http://代理ip:代理端口"进行认证，然后才能通过socks5协议进行UDP、TCP转发，否则直接代理关闭连接。
-            //Proxy-Authorization: Digest 
+            //为提高安全性，增加http认证。
+            //socks5无认证（用户名、密码认证）时，需要先通过浏览器访问"http://代理ip:代理端口"进行认证，然后才能通过socks5协议进行UDP、TCP转发，否则直接关闭连接。
+            //Proxy-Authorization: Digest
+            //是否为HTTP请求，报文以CONNECT或GET开头需要进行http认证
             boolean httpFlag = securityService.isHTTPRequest(buffer);
             if (httpFlag) {
-                //处理http认证，本地测试时是127.0.0.1
+                //处理http认证
                 String host = remoteAddress.host();
                 int remotePort = remoteAddress.port();
                 ///authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
@@ -193,59 +204,88 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 String[] methodAndUrl = buffer.toString().split(" ", 3);
                 HttpMethod method = HttpMethod.valueOf(methodAndUrl[0]);
                 String url = methodAndUrl[1];
-                //是否为http认证请求，当url包括“:port”或者“:port/”，port为穿透代理外网端口，则表示为http代理认证请求
+                //是否为http代理认证请求，当url包括“:port”或者“:port/”，port为穿透代理外网端口，则表示为http代理认证请求
                 boolean httpProxyAuthRequest = url.contains(":") && (url.endsWith(":" + clientProxy.getRemote_port()) || url.contains(":" + clientProxy.getRemote_port() + "/"));
-                if (authorized || securityService.authorizeHttp(clientRegister, host, buffer, true)) {
-                    if (httpProxyAuthRequest) {
-                        log.debug("[{}]正向代理穿透HTTP认证成功！", host);
-                        //代理本身端口用于认证，认证成功返回
-                        socket.end(Buffer.buffer(securityService.getOKResponse()));
+                if (httpProxyAuthRequest) {
+                    if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
+                        if (securityService.authorizeHttpProxy(clientRegister, host, buffer)) {
+                            //HTTP代理方式穿透，通过代理IP:端口认证，认证成功返回成功就行
+                            log.debug("[{}]HTTP正向代理穿透代理认证成功！", host);
+                            socket.end(Buffer.buffer(securityService.getOKResponse()));
+                        } else {
+                            //认证未通过，返回认证失败
+                            log.warn("[{}]未授权访问HTTP代理:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
+                            //http代理认证
+                            socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
+                        }
                     } else {
-                        //判断是否包含Proxy-Connection请求头，如果包含，是http代理协议请求，建立http代理协议穿透连接
-                        StringTokenizer requestLines = new StringTokenizer(buffer.toString(), "\r\n");
-                        boolean proxy = false;
-                        // 提取目标主机和端口示例逻辑
-                        String targetHost = null;
-                        int targetPort = -1;
-                        while (requestLines.hasMoreTokens()) {
-                            String requestLine = requestLines.nextToken();
-                            if (requestLine.startsWith("Proxy-Connection")) {
-                                proxy = true;
-                            } else if (requestLine.startsWith(HOST_START)) {
+                        //不支持http代理方式，直接关闭
+                        socket.close();
+                    }
+                } else {
+                    //不是配置客户端代理地址后浏览器直接输入http(s)://代理服务地址:端口进行认证，通过header头里的是否有“Proxy-Connection”判断是否为代理请求
+                    //不是通过代理IP:端口认证，判断是否包含Proxy-Connection请求头，如果包含，是http代理协议请求，建立http代理协议穿透连接
+                    StringTokenizer requestLines = new StringTokenizer(buffer.toString(), "\r\n");
+                    //是否为HTTP代理请求
+                    boolean proxyConnection = false;
+                    // 提取目标主机和端口示例逻辑
+                    String targetHost = null;
+                    int targetPort = -1;
+                    while (requestLines.hasMoreTokens()) {
+                        String requestLine = requestLines.nextToken();
+                        if (requestLine.startsWith(PROXY_CONNECTION)) {
+                            proxyConnection = true;
+                        } else if (requestLine.startsWith(HOST_START)) {
                                 /*
                                 Host: substrate.office.com:443
                                 Host: 192.168.0.89:8001
                                 Host: 192.168.0.89
                                 */
-                                String hostInHeader = requestLine.substring(HOST_START.length());
-                                if (hostInHeader.contains(":")) {
-                                    String[] hostPort = hostInHeader.split(":");
-                                    targetHost = hostPort[0];
-                                    targetPort = Integer.parseInt(hostPort[1]);
-                                } else {
-                                    targetHost = hostInHeader;
-                                    targetPort = 80; // 默认HTTP端口
-                                }
-                            }
-                            if (proxy && targetHost != null) {
-                                break;
+                            String hostInHeader = requestLine.substring(HOST_START.length());
+                            if (hostInHeader.contains(":")) {
+                                String[] hostPort = hostInHeader.split(":");
+                                targetHost = hostPort[0];
+                                targetPort = Integer.parseInt(hostPort[1]);
+                            } else {
+                                targetHost = hostInHeader;
+                                targetPort = 80; // 默认HTTP端口
                             }
                         }
-                        if (proxy && targetHost != null) {
-                            //重新设置tcp数据接收处理器
-                            socket.handler(dataHandler(msgId));
-                            //转发请求
-                            log.debug("转发来自[{}]的正向代理穿透HTTP请求到内网客户端！", remoteAddress);
-                            this.sendConnectInfo(socket, requestId, msgId, HttpMethod.CONNECT == method ? SocksProxyProto.HTTPS : SocksProxyProto.HTTP, targetHost, null, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array(), buffer);
-                        } else {
-                            log.warn("关闭来自[{}]的非正向代理穿透请求！", remoteAddress);
-                            socket.end(Buffer.buffer(securityService.getOKResponse()));
+                        if (proxyConnection && targetHost != null) {
+                            break;
                         }
                     }
-                } else {
-                    log.warn("[{}]未授权访问:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
-                    // 将重定向响应写入socket
-                    socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
+                    if (proxyConnection) {//HTTP代理请求
+                        if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
+                            if (securityService.authorizeHttpProxy(clientRegister, host, buffer)) {//通过认证的代理请求，尝试和内网建立连接转发数据
+                                //重新设置tcp数据接收处理器
+                                socket.handler(dataHandler(msgId));
+                                //转发请求
+                                log.debug("转发来自[{}]的正向代理穿透HTTP请求到内网客户端！", remoteAddress);
+                                this.sendConnectInfo(socket, requestId, msgId, HttpMethod.CONNECT == method ? SocksProxyProto.HTTPS : SocksProxyProto.HTTP, targetHost, null, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array(), buffer);
+                            } else {
+                                log.warn("[{}]未授权访问HTTP代理:{}，直接关闭！", remoteAddress, remotePort);
+                                socket.end();
+                            }
+                        } else {
+                            //不支持http代理方式，直接关闭
+                            socket.close();
+                        }
+                    } else {
+                        if (clientProxy.getType() == ServiceType.SOCKS4 || clientProxy.getType() == ServiceType.SOCKS5 || clientProxy.getType() == ServiceType.SMART_PROXY) {
+                            //支持socks无认证代理，需要先做http认证
+                            if (securityService.authorizeHttp(clientRegister, host, buffer)) {
+                                //http认证成功，只返回ok，可以客户端配置socks方式访问内网
+                                socket.end(Buffer.buffer(securityService.getOKResponse()));
+                            } else {
+                                log.warn("来自[{}]的非正向代理穿透方式请求，浏览器弹窗提示输入认证信息！", remoteAddress);
+                                socket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
+                            }
+                        } else {
+                            //不支持socks代理方式，直接关闭
+                            socket.close();
+                        }
+                    }
                 }
             } else {
                 //判断是否为sock4、sock4a、sock5代理协议
@@ -256,7 +296,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 }
                 // VERSION：协议版本号，1个字节，socks5为0x05
                 byte version = buffer.getByte(0);
-                if (version == SOCKS4_VERSION) {
+                if (version == SOCKS4_VERSION && (clientProxy.getType() == ServiceType.SOCKS4 || clientProxy.getType() == ServiceType.SMART_PROXY)) {
                     //报文格式：VERSION(1) + CD(1) + DSTPORT(2) + DSTIP(4) + USERID(var) + NULL(1)
                     //获取CD 1字节 操作代码，连接请求值为1
                     byte cmd = buffer.getByte(1);
@@ -303,8 +343,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         //比如www.example.com
                         log.debug("来自[{}]的SOCKS4a代理穿透请求，目标域名为：{}", remoteAddress, domainBuilder);
                     }
-
-                    if (clientRegister.getUsername().equals(userId)) {
+                    //用户名和host验证
+                    if ((StringUtils.hasText(userId) && clientRegister.getUsername().equals(userId)) || securityService.authorized(socket.remoteAddress().host())) {
                         log.debug("来自[{}]的SOCKS4代理穿透请求认证通过！", remoteAddress);
                         String targetHost = socks4a ? domainBuilder.toString() : dstIP;
                         sendConnectInfo(socket, requestId, msgId, SocksProxyProto.SOCK4A_TCP, targetHost, dstIPByte, targetPort, Buffer.buffer());
@@ -312,7 +352,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         log.warn("来自[{}]的SOCKS4代理穿透请求认证失败！", remoteAddress);
                         socket.close();
                     }
-                } else if (version == SOCKS5_VERSION) {
+                } else if (version == SOCKS5_VERSION && (clientProxy.getType() == ServiceType.SOCKS5 || clientProxy.getType() == ServiceType.SMART_PROXY)) {
                     //NMETHODS：客户端支持的认证方法数量，1个字节，1~255
                     int nMethods = buffer.getByte(1) & 0xFF;
                     if (buffer.length() < 2 + nMethods) {
@@ -351,7 +391,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                         socket.handler(socks5RequestHandler(socket, msgId));
                     }
                 } else {
-                    log.warn("socks协议版本号不匹配：{}", remoteAddress);
+                    log.warn("socks协议版本号不匹配，或者不支持，直接关闭：{}", remoteAddress);
                     socket.close();
                 }
             }

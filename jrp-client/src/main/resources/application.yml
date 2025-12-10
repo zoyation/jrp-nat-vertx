@@ -1,18 +1,18 @@
 vertx:
   jrp:
-    #配置文件存储方式，目前支持file和redis
+    #配置文件存储方式，目前支持file和redis，默认file
     config-store-type: file
-    #内网穿透代理注册服务地址，服务端启动时，会自动注册到内网穿透代理服务中，支持ipv6地址(比如:"[2408:8266:e01:7e04:119c:9be2:2bba:4178]:2000")
+    #内网穿透代理服务地址（一般是外网机器上部署的穿透服务端地址），启动时，会自动连接注册到内网穿透代理服务中，支持ipv6地址(比如:"[2408:8266:e01:7e04:119c:9be2:2bba:4178]:2000")
     register-address: "127.0.0.1:2000"
-    # 穿透中转websocket是否启用ssl
+    # 穿透中转websocket是否启用ssl，默认false
     ssl: false
-    #内网穿透代理服务注册断线重连次数
+    #内网穿透代理服务注册断线重连次数，默认600
     reconnection-times: 600
     #内网穿透验证信息
     token: 2023202
-    #穿透成功后，访问时的认证用户名，如果没配置会使用服务端里面配置的认证信息。
+    #穿透成功后，访问时的认证用户名，如果没配置会使用服务端里面配置的认证信息
     username: client
-    #穿透成功后，访问时的认证密码，如果没配置会使用服务端里面配置的认证信息。
+    #穿透成功后，访问时的认证密码，如果没配置会使用服务端里面配置的认证信息
     password: 10086
     redis:
       # 单机-STANDALONE,哨兵-SENTINEL,集群-CLUSTER,主从-REPLICATION
@@ -33,7 +33,7 @@ vertx:
 # 日志配置
 logging:
   level:
-    root: info
+    root: error
     # web日志
     org.springframework.web: error
     # security 日志
@@ -51,8 +51,8 @@ logging:
   # 输出文件名及路径，不配置则不输出文件
   file:
     # 切记，该文件表示正在产出日志的日志文件。并不会打包，当文件大于max-file-size,会根据file-name-pattern格式打包
-    # 名称为log/jrp.log文件夹会在项目根目录下，打包后会在启动包同目录下；名称为/log/jrp-client.log的文件夹会在项目所在磁盘的跟目录下
-    name: log/jrp-client.log
+    # 名称为log/jrp.log文件夹会在项目根目录下，打包后会在启动包同目录下；名称为/log/jrp.log的文件夹会在项目所在磁盘的跟目录下
+    name: log/jrp.log
   logback:
     rollingpolicy:
       clean-history-on-start: true

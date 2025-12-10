@@ -439,6 +439,10 @@ public class ProxyClientManager implements InitializingBean {
                                                     message = "SOCKS5代理服务穿透后外网地址：[%s:%s]！";
                                                     logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                     break;
+                                                case SMART_PROXY:
+                                                    message = "智能代理(同时支持http代理、https代理、socks4、socks4a、socks5)服务穿透后外网地址：[%s:%s]！";
+                                                    logMessage = String.format(message, registerHost, proxy.getRemote_port());
+                                                    break;
                                             }
                                             log.info(logMessage);
                                         }

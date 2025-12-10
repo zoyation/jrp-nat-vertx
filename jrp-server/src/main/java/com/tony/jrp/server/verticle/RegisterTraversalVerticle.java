@@ -112,8 +112,11 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                     verticle = new UDPVerticle(serverSocket, securityService, clientRegister, clientProxy);
                     break;
                 }
+                case HTTP_PROXY:
+                case HTTPS_PROXY:
                 case SOCKS4:
                 case SOCKS5:
+                case SMART_PROXY:
                     verticle = new ForwardProxyVerticle(serverSocket, securityService, clientRegister, clientProxy);
                     break;
                 default:

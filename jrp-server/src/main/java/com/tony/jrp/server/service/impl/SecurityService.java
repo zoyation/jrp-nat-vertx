@@ -9,7 +9,6 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.net.KeyCertOptions;
 import io.vertx.core.net.PemKeyCertOptions;
-import io.vertx.core.net.SelfSignedCertificate;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
@@ -141,6 +140,16 @@ public class SecurityService implements InitializingBean {
         } catch (UnsupportedEncodingException e) {
             return false;
         }
+    }
+
+    /**
+     * @param clientRegister 客户端注册信息
+     * @param host           主机
+     * @param data           http文本信息
+     * @return 是否授权通过
+     */
+    public boolean authorizeHttpProxy(ClientRegister clientRegister, String host, Buffer data) {
+        return authorizeHttp(clientRegister, host, data, true);
     }
 
     /**
@@ -448,6 +457,7 @@ public class SecurityService implements InitializingBean {
         return data.startsWith(HttpMethod.CONNECT.name()) || (data.startsWith(HttpMethod.GET.name()) && data.contains("connection: upgrade"));
     }
 
+
     @Override
     public void afterPropertiesSet() {
         if (StringUtils.hasText(properties.getWhiteUrl())) {
@@ -456,7 +466,16 @@ public class SecurityService implements InitializingBean {
         if (StringUtils.hasText(properties.getCertPath()) && StringUtils.hasText(properties.getKeyPath())) {
             keyCertOptions = new PemKeyCertOptions().setCertPath(properties.getCertPath()).setKeyPath(properties.getKeyPath());
         } else {
-            keyCertOptions = SelfSignedCertificate.create().keyCertOptions();
+            try {
+                // 使用 Vert.x 的自签名证书工具
+                io.vertx.core.net.SelfSignedCertificate selfSignedCert =
+                        io.vertx.core.net.SelfSignedCertificate.create();
+                keyCertOptions = selfSignedCert.keyCertOptions();
+            } catch (Exception e) {
+                log.error("Failed to create self-signed certificate", e);
+                // 回退到默认的空 PemKeyCertOptions
+                keyCertOptions = new PemKeyCertOptions();
+            }
         }
         //10秒清理一次过期host
         Executors.newScheduledThreadPool(1).scheduleAtFixedRate(() -> {

@@ -96,11 +96,11 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
     }
 
     /**
-     * 获取缓存的请求
+     * 获取缓存的请求，如果进行了转发就会缓存请求信息
      *
      * @param requestId 请求ID
      */
-    protected boolean hasRequest(int requestId) {
+    protected boolean cacheRequest(int requestId) {
         return clientSocketMap.containsKey(requestId);
     }
 

@@ -23,7 +23,7 @@ public class ServerApplication extends AbstractVerticle {
     public static void main(String[] args) {
         List<String> list = getVertxArgs(args, ServerApplication.class.getName());
         DatabindCodec.mapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-        new Launcher().dispatch(list.toArray(new String[]{}));
+        new Launcher().dispatch(list.toArray(new String[0]));
     }
 
     /**

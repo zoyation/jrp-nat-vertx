@@ -31,7 +31,7 @@ public class ClientApplication extends AbstractVerticle {
                 options.setAddressResolverOptions(null);
                 super.beforeStartingVertx(options);
             }
-        }.dispatch(list.toArray(new String[]{}));
+        }.dispatch(list.toArray(new String[0]));
     }
 
     /**

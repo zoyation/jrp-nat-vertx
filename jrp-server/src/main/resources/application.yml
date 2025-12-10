@@ -25,7 +25,7 @@ vertx:
 # 日志配置
 logging:
   level:
-    root: info
+    root: error
     # web日志
     org.springframework.web: error
     # security 日志
