@@ -5,3 +5,4 @@
 /.idea/
 /jrp.iml
 /jrp-server/log/*
+/jrp-client/log/

@@ -39,14 +39,20 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="proxy_pass" label="服务地址">
+                            <el-table-column prop="proxy_pass" label="本地服务地址">
                                 <template #default="{ row, $index }">
                                     <el-form-item
                                             :prop="`remote_proxies[${$index}].proxy_pass`"
                                             :rules="rules.proxy_pass"
 
                                     >
-                                        <el-input v-model="row.proxy_pass" size="large" class="table-input"/>
+                                         <el-input
+                                                        v-model="row.proxy_pass"
+                                                        size="large"
+                                                        class="table-input"
+                                                        :disabled="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type)"
+                                                        :placeholder="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type) ? '代理类型无需填写' : '请输入服务地址'"
+                                                    />
                                     </el-form-item>
                                 </template>
                             </el-table-column>
@@ -58,27 +64,27 @@
 
                                     >
                                         <el-select v-model="row.type" size="large" class="table-select">
-                                            <el-option label="HTTP协议" value="HTTP"/>
-                                            <el-option label="HTTPS协议" value="HTTPS"/>
-                                            <el-option label="TCP协议" value="TCP"/>
-                                            <el-option label="UDP协议" value="UDP"/>
+                                              <el-option label="HTTP端口映射" value="HTTP" title="将HTTP请求转发到指定端口"/>
+                                              <el-option label="HTTPS端口映射" value="HTTPS" title="将HTTPS请求转发到指定端口"/>
+                                              <el-option label="TCP端口映射" value="TCP" title="将TCP流量转发到指定端口"/>
+                                              <el-option label="UDP端口映射" value="UDP" title="将UDP流量转发到指定端口"/>
+                                              <el-option label="HTTP代理" value="HTTP_PROXY" title="使用HTTP协议进行代理转发"/>
+                                              <el-option label="HTTPS代理" value="HTTPS_PROXY" title="使用HTTPS协议进行代理转发"/>
+                                              <el-option label="SOCKS4代理" value="SOCKS4" title="使用SOCKS4协议进行代理转发"/>
+                                              <el-option label="SOCKS5代理" value="SOCKS5" title="使用SOCKS5协议进行代理转发"/>
+                                              <el-option label="智能代理" value="SMART_PROXY" title="同时支持HTTP代理、HTTPS代理、SOCKS4和SOCKS5代理"/>
                                         </el-select>
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="remote_port" label="穿透外网访问端口">
+                            <el-table-column prop="remote_port" label="穿透端口（服务端）">
                                 <template #default="{ row, $index }">
-                                    <el-form-item
-                                            :prop="`remote_proxies[${$index}].remote_port`"
-                                            :rules="rules.remote_port"
-
-                                    >
-                                        <el-input v-model.number="row.remote_port" type="number" :min="0" size="large"
-                                                  class="table-input"/>
+                                    <el-form-item :prop="`remote_proxies[${$index}].remote_port`" :rules="rules.remote_port">
+                                        <el-input v-model.number="row.remote_port" type="number" :min="0" size="large" class="table-input"/>
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column label="穿透外网访问地址">
+                            <el-table-column label="穿透外网地址">
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
                                         <a v-if="row.type=='HTTP'||row.type=='HTTPS'"
@@ -157,7 +163,6 @@
             { min: 1, max: 50, message: '长度应在 1 到 50 个字符之间', trigger: 'blur' }
         ],
         proxy_pass: [
-            { required: true, message: '请输入服务地址', trigger: 'blur' },
             { validator: validateProxyPass, trigger: 'blur' }
         ],
         type: [
@@ -171,6 +176,17 @@
 
     // 自定义校验函数 - 服务地址格式校验
     function validateProxyPass(rule, value, callback) {
+        // 获取当前行的索引
+        const index = parseInt(rule.field.match(/\[(\d+)\]/)[1]);
+        const currentType = configData.remote_proxies[index].type;
+
+        // 如果是代理类型，则proxy_pass可以为空
+        const proxyTypes = ['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'];
+        if (proxyTypes.includes(currentType)) {
+            return callback(); // 代理类型不需要校验proxy_pass
+        }
+
+        // 非代理类型必须填写proxy_pass
         if (!value) {
             return callback(new Error('请输入服务地址'));
         }
@@ -318,6 +334,7 @@
     .proxy-config-form {
       max-width: max(calc(100vw - 1000px),1200px);
       margin: 20px auto;
+      overflow: hidden;
     }
 
     .proxies-section {
@@ -326,12 +343,12 @@
 
     .proxy-table {
       min-height: 300px;
-      max-height: 70vh;
+      max-height: min(calc(100vw - 30px),70vh);
       overflow-y: auto;
     }
 
     .proxies-section .el-card__body {
-      padding-bottom: 60px;
+      padding-bottom: 30px;
     }
 
     .proxies-section > div[style*="margin-top"] {

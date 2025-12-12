@@ -37,7 +37,7 @@
 ### win11配置
 1. **打开设置界面：**"开始"->"设置"->"网络和 Internet"->"代理"->"手动设置代理"->"编辑" 
 2. **代理IP地址：** 值可设置为http=外网IP:1080;socks=外网IP:1080
-3. **请勿对以下列条目开头的地址使用代理服务：** 值设置为https://*;127.0.0.1;外网IP;http://www.*;functional.events.data.microsoft.com;chinanorth3-0.in.applicationinsights.azure.cn
+3. **请勿对以下列条目开头的地址使用代理服务：** 值设置为https://*;127.0.0.1;外网IP;http://www.*;functional.events.data.microsoft.com;chinanorth3-0.in.applicationinsights.azure.cn;access-point.cloudmessaging.edge.microsoft.com
 4. **首次访问：** 需访问 http://WANIP:1080 认证，输入穿透客户端application.yml里配置的用户名和密码（client，10086）进行认证
 5. **访问内网服务：** 输入内网服务地址访问内网服务
 

@@ -283,7 +283,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                                 //http认证成功，只返回ok，可以客户端配置socks方式访问内网
                                 socket.end(Buffer.buffer(securityService.getOKResponse()));
                             } else {
-                                log.warn("来自[{}]的非正向代理穿透方式请求，浏览器弹窗提示输入认证信息！", remoteAddress);
+                                log.warn("来自[{}]的非HTTP正向代理穿透方式请求，浏览器弹窗提示输入认证信息！", remoteAddress);
                                 socket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
                             }
                         } else {

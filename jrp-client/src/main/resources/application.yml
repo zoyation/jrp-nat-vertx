@@ -3,7 +3,7 @@ vertx:
     #配置文件存储方式，目前支持file和redis，默认file
     config-store-type: file
     #内网穿透代理服务地址（一般是外网机器上部署的穿透服务端地址），启动时，会自动连接注册到内网穿透代理服务中，支持ipv6地址(比如:"[2408:8266:e01:7e04:119c:9be2:2bba:4178]:2000")
-    register-address: "127.0.0.1:2000"
+    register-address: "115.175.23.114:2000"
     # 穿透中转websocket是否启用ssl，默认false
     ssl: false
     #内网穿透代理服务注册断线重连次数，默认600
