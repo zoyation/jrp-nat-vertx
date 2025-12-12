@@ -14,6 +14,7 @@ vertx:
     username: client
     #穿透成功后，访问时的认证密码，如果没配置会使用服务端里面配置的认证信息
     password: 10086
+    #redis配置，默认file类型，无需配置
     redis:
       # 单机-STANDALONE,哨兵-SENTINEL,集群-CLUSTER,主从-REPLICATION
       client-type: STANDALONE

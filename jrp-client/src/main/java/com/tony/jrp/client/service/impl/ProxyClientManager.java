@@ -424,23 +424,23 @@ public class ProxyClientManager implements InitializingBean {
                                                     logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                                                     break;
                                                 case HTTP_PROXY:
-                                                    message = "HTTP代理服务穿透后外网地址：[http://%s:%s]！";
+                                                    message = "HTTP代理服务穿透后外网代理地址：[http://%s:%s]！";
                                                     logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                     break;
                                                 case HTTPS_PROXY:
-                                                    message = "HTTPS代理服务穿透后外网地址：[https://%s:%s]！";
+                                                    message = "HTTPS代理服务穿透后外网代理地址：[https://%s:%s]！";
                                                     logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                     break;
                                                 case SOCKS4:
-                                                    message = "SOCKS4代理服务穿透后外网地址：[%s:%s]！";
+                                                    message = "SOCKS4代理服务穿透后外网代理地址：[%s:%s]！";
                                                     logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                     break;
                                                 case SOCKS5:
-                                                    message = "SOCKS5代理服务穿透后外网地址：[%s:%s]！";
+                                                    message = "SOCKS5代理服务穿透后外网代理地址：[%s:%s]！";
                                                     logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                     break;
                                                 case SMART_PROXY:
-                                                    message = "智能代理(同时支持http代理、https代理、socks4、socks4a、socks5)服务穿透后外网地址：[%s:%s]！";
+                                                    message = "智能代理(同时支持http代理、https代理、socks4、socks4a、socks5)服务穿透后外网代理地址：[%s:%s]！";
                                                     logMessage = String.format(message, registerHost, proxy.getRemote_port());
                                                     break;
                                             }

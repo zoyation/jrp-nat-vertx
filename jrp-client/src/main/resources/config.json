@@ -19,9 +19,14 @@
     {
       "id": "3",
       "name": "测试3",
-      "proxy_pass": "",
       "type": "SMART_PROXY",
       "remote_port": 1080
+    },
+    {
+      "id": "4",
+      "name": "测试4",
+      "type": "HTTP_PROXY",
+      "remote_port": 1081
     }
   ]
 }

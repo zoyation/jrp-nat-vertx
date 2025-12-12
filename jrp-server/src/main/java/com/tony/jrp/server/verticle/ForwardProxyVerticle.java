@@ -109,6 +109,10 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
         //options.setClientAuth(ClientAuth.REQUIRED);
         options.setReceiveBufferSize(BUFFER_SIZE);
         options.setSendBufferSize(BUFFER_SIZE);
+        if (clientProxy.getType() == ServiceType.HTTPS_PROXY) {
+            options.setSsl(true);
+            options.setKeyCertOptions(securityService.getKeyCertOptions());
+        }
         //TCP监听
         server = this.vertx.createNetServer(options);
         // 处理SOCKS5连接请求，和基于端口的反向代理转发处理方式不一样：多了握手处理、认证处理（可选），握手和认证处理完后，从SOCKS5请求数据中获取目标服务地址和端口
@@ -195,6 +199,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
             //是否为HTTP请求，报文以CONNECT或GET开头需要进行http认证
             boolean httpFlag = securityService.isHTTPRequest(buffer);
             if (httpFlag) {
+                log.debug("收到[{}]客户端数据[{}]！", remoteAddress.toString(), buffer.toString());
                 //处理http认证
                 String host = remoteAddress.host();
                 int remotePort = remoteAddress.port();
