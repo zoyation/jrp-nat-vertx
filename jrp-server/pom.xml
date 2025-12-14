@@ -77,7 +77,7 @@
         </dependency>
     </dependencies>
     <build>
-        <finalName>${project.artifactId}-${project.version}</finalName>
+        <finalName>${project.artifactId}</finalName>
         <sourceDirectory>src/main/java</sourceDirectory>
         <resources>
             <resource>
@@ -107,7 +107,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <finalName>${project.artifactId}-${project.version}</finalName>
+                    <finalName>${project.artifactId}</finalName>
                     <layout>ZIP</layout>
                 </configuration>
                 <!--                <configuration>-->

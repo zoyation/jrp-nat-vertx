@@ -6,7 +6,7 @@
 ssh、数据库连接、windows远程)、UDP穿透。
 
 该工具支持功能清单如下：
-1. HTTP、HTTPS、TCP、UDP穿透，**HTTP、HTTPS都可以穿透为HTTPS**。
+1. 支持“HTTP、HTTPS、TCP、UDP”端口映射穿透和“HTTP代理、HTTPS代理、STCP(sock4/SOCKS5 TCP)”正向代理穿透，**HTTP、HTTPS都可以穿透为HTTPS**。
 2. “HTTP、HTTPS、TCP、UDP”**统一按http/https用户名和密码认证**，服务端设置默认用户名、密码，**客户端可自定义用户名、密码**。
 3. 断线重连功能、开启ssl功能。
 4. 客户端穿透配置热加载，通过web页面修改配置，配置存文件或redis。
@@ -14,11 +14,10 @@ ssh、数据库连接、windows远程)、UDP穿透。
 6. IPV4、IPV6穿透。
 
 不支持代理功能如下：
-1. STCP：安全的TCP内网代理，不需要在服务端暴露端口。
-2. SUDP：安全的UDP内网代理，与STCP类似，不需要在服务端暴露端口。
-3. XTCP：点对点内网穿透代理，与STCP类似，但流量不需要经过服务器中转。
-4. TCPMUX：服务端TCP端口的多路复用，允许通过同一端口访问不同的内网服务。
-5. STATIC: 静态文件穿透，支持HTTP、HTTPS。
+1. SUDP：安全的UDP内网代理，与STCP类似，不需要在服务端暴露端口。
+2. XTCP：点对点内网穿透代理，与STCP类似，但流量不需要经过服务器中转。
+3. TCPMUX：服务端TCP端口的多路复用，允许通过同一端口访问不同的内网服务。
+4. STATIC: 静态文件穿透，支持HTTP、HTTPS。
 
 jrp-nat包括服务端jrp-server和客户端jrp-client。
 
@@ -219,10 +218,9 @@ jrp-nat包括服务端jrp-server和客户端jrp-client。
 3. 客户端和服务端websocket连接增加开启ssl配置功能，需要客户端和服务端的application.yml文件里都配置ssl的值为true。
 ### 1.1.0 版本
 1. 认证加固：安全考虑，去掉HTTP类认证通过后基于IP的简单认证，认证通过去掉返回认证类型提示，只返回200状态码；验证增加时间限制控制，时间限制参数可在配置文件配置。
-2. HTTP(S)代理穿透：增加HTTP正向代理、HTTPS正向代理转发功能，结合window等代理配置正向代理方式（输入内网服务地址和端口号）穿透访问内网。
-3. SOCKS代理穿透：增加SOCK4正向代理、SOCK5正向代理转发功能，结合window等代理配置正向代理方式（输入内网服务地址和端口号）穿透访问内网。
-4. 穿透端口自动分配：客户端不指定穿透端口时，动态分配一个可用端口并返回给客户端。
-5. 开机自启动：在安装了jdk或jre基础上，在linux和window环境下通过脚本或者程序一键设置开机自启。
+2. HTTP(S)代理穿透：增加HTTP正向代理、HTTPS正向代理穿透功能，结合window等代理配置正向代理方式（输入内网服务地址和端口号）穿透访问内网。
+3. SOCKS代理穿透：增加SOCK4正向代理、SOCK5正向代理穿透功能，结合window等代理配置正向代理方式（输入内网服务地址和端口号）穿透访问内网。
+4. 开机自启动：在安装了jdk或jre基础上，在linux和window环境下通过脚本或者程序一键设置开机自启。
 ## 联系我
 如需了解更多，请关注微信公众号java-tony：
 ![java-tony](jrp-doc/images/java-tony.png)

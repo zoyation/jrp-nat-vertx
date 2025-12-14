@@ -27,6 +27,24 @@
       "name": "测试4",
       "type": "HTTP_PROXY",
       "remote_port": 1081
+    },
+    {
+      "id": "5",
+      "name": "测试5",
+      "type": "HTTPS_PROXY",
+      "remote_port": 1082
+    },
+    {
+      "id": "6",
+      "name": "测试6",
+      "type": "SOCKS4",
+      "remote_port": 1083
+    },
+    {
+      "id": "7",
+      "name": "测试7",
+      "type": "SOCKS5",
+      "remote_port": 1084
     }
   ]
 }

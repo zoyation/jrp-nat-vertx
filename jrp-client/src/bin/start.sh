@@ -1,8 +1,8 @@
 #!/bin/bash
-pid=`ps -ef | grep jrp-client-1.1.0.jar | grep -v grep | awk '{print $2}'`
+pid=`ps -ef | grep jrp-client.jar | grep -v grep | awk '{print $2}'`
 if [ -n "$pid" ]; then
   kill -9 $pid
 fi
-nohup java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client-1.1.0.jar start>/dev/null 2>&1 &
+nohup java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client.jar start>/dev/null 2>&1 &
 sleep 5
 tail -f log/jrp.log

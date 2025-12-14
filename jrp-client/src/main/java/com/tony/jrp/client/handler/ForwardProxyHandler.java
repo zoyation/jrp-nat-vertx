@@ -183,7 +183,6 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                             throw new RuntimeException("无法解析请求！");
                                         }
                                     }
-
                                 }
                             } else {
                                 log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());

@@ -27,21 +27,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
      */
     public static final String CONFIG_PATH = "config.json";
     private ConfigStoreOptions storeOptions;
-    /**
-     * 默认代理配置信息
-     */
-    public static final String DEFAULT_JSON_CONFIG = "{\n" +
-            "  \"path\": \"/jrp-client\",\n" +
-            "  \"port\": 8000,\n" +
-            "  \"remote_proxies\": [\n" +
-            "    {\n" +
-            "      \"name\": \"测试\",\n" +
-            "      \"proxy_pass\": \"http://127.0.0.1:8000\",\n" +
-            "      \"type\": \"HTTP\",\n" +
-            "      \"remote_port\": 8001\n" +
-            "    }\n" +
-            "  ]\n" +
-            "}";
+
 
     public ConfigStoreOptions getConfigStore() {
         return storeOptions;

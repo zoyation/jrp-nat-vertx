@@ -22,6 +22,7 @@ import org.springframework.util.StringUtils;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Map;
+import java.util.StringJoiner;
 import java.util.StringTokenizer;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -68,6 +69,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
     private static final byte SOCKS4_REPLY_SUCCEEDED = 0x5A;
     public static final String HOST_START = "Host: ";
     public static final String PROXY_CONNECTION = "Proxy-Connection";
+    public static final String PROXY_AUTHORIZATION = "Proxy-Authorization";
     /**
      * 在类中添加UDP服务器映射
      */
@@ -215,11 +217,11 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
                         if (securityService.authorizeHttpProxy(clientRegister, host, buffer)) {
                             //HTTP代理方式穿透，通过代理IP:端口认证，认证成功返回成功就行
-                            log.debug("[{}]HTTP正向代理穿透代理认证成功！", host);
+                            log.debug("[{}]正向代理穿透认证成功！", host);
                             socket.end(Buffer.buffer(securityService.getOKResponse()));
                         } else {
                             //认证未通过，返回认证失败
-                            log.warn("[{}]未授权访问HTTP代理:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
+                            log.warn("[{}]未授权访问正向代理穿透:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
                             //http代理认证
                             socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
                         }
@@ -231,6 +233,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     //不是配置客户端代理地址后浏览器直接输入http(s)://代理服务地址:端口进行认证，通过header头里的是否有“Proxy-Connection”判断是否为代理请求
                     //不是通过代理IP:端口认证，判断是否包含Proxy-Connection请求头，如果包含，是http代理协议请求，建立http代理协议穿透连接
                     StringTokenizer requestLines = new StringTokenizer(buffer.toString(), "\r\n");
+                    //拼接转发到内网的数据
+                    StringJoiner dataBuilder = new StringJoiner("\r\n");
                     //是否为HTTP代理请求
                     boolean proxyConnection = false;
                     // 提取目标主机和端口示例逻辑
@@ -255,9 +259,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                                 targetHost = hostInHeader;
                                 targetPort = 80; // 默认HTTP端口
                             }
-                        }
-                        if (proxyConnection && targetHost != null) {
-                            break;
+                            dataBuilder.add(requestLine);
+                        } else if (!requestLine.startsWith(PROXY_AUTHORIZATION)) {
+                            dataBuilder.add(requestLine);
                         }
                     }
                     if (proxyConnection) {//HTTP代理请求
@@ -267,7 +271,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                                 socket.handler(dataHandler(msgId));
                                 //转发请求
                                 log.debug("转发来自[{}]的正向代理穿透HTTP请求到内网客户端！", remoteAddress);
-                                this.sendConnectInfo(socket, requestId, msgId, HttpMethod.CONNECT == method ? SocksProxyProto.HTTPS : SocksProxyProto.HTTP, targetHost, null, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array(), buffer);
+                                String httpData = dataBuilder.toString() + "\r\n\r\n";
+                                this.sendConnectInfo(socket, requestId, msgId, HttpMethod.CONNECT == method ? SocksProxyProto.HTTPS : SocksProxyProto.HTTP, targetHost, null, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array(), Buffer.buffer(httpData));
                             } else {
                                 log.warn("[{}]未授权访问HTTP代理:{}，直接关闭！", remoteAddress, remotePort);
                                 socket.end();
