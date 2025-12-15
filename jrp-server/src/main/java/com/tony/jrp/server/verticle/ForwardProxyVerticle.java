@@ -264,14 +264,14 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                             dataBuilder.add(requestLine);
                         }
                     }
+                    String httpData = dataBuilder.toString() + "\r\n\r\n";
                     if (proxyConnection) {//HTTP代理请求
                         if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
                             if (securityService.authorizeHttpProxy(clientRegister, host, buffer)) {//通过认证的代理请求，尝试和内网建立连接转发数据
                                 //重新设置tcp数据接收处理器
-                                socket.handler(dataHandler(msgId));
+                                socket.handler(httDataHandler(msgId));
                                 //转发请求
                                 log.debug("转发来自[{}]的正向代理穿透HTTP请求到内网客户端！", remoteAddress);
-                                String httpData = dataBuilder.toString() + "\r\n\r\n";
                                 this.sendConnectInfo(socket, requestId, msgId, HttpMethod.CONNECT == method ? SocksProxyProto.HTTPS : SocksProxyProto.HTTP, targetHost, null, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array(), Buffer.buffer(httpData));
                             } else {
                                 log.warn("[{}]未授权访问HTTP代理:{}，直接关闭！", remoteAddress, remotePort);
@@ -541,6 +541,34 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                     .appendByte(JRPMsgType.RECEIVE.getCode())
                     .appendBuffer(msgId)
                     .appendBuffer(buffer));
+        };
+    }
+
+    /**
+     * http数据处理器：接收和转发用户端数据到内网代理程序
+     */
+    private Handler<Buffer> httDataHandler(Buffer msgId) {
+        return buffer -> {
+            Buffer sendBuffer;
+            if (securityService.isHTTPRequest(buffer)) {
+                StringTokenizer requestLines = new StringTokenizer(buffer.toString(), "\r\n");
+                //拼接转发到内网的数据
+                StringJoiner dataBuilder = new StringJoiner("\r\n");
+                while (requestLines.hasMoreTokens()) {
+                    String requestLine = requestLines.nextToken();
+                    if (!requestLine.startsWith(PROXY_CONNECTION) && !requestLine.startsWith(PROXY_AUTHORIZATION)) {
+                        dataBuilder.add(requestLine);
+                    }
+                }
+                String httpData = dataBuilder + "\r\n\r\n";
+                sendBuffer = Buffer.buffer(httpData);
+            } else {
+                sendBuffer = buffer;
+            }
+            serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + buffer.length())
+                    .appendByte(JRPMsgType.RECEIVE.getCode())
+                    .appendBuffer(msgId)
+                    .appendBuffer(sendBuffer));
         };
     }
 
