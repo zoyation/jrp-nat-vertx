@@ -556,13 +556,19 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ForwardProxyR
                 StringJoiner dataBuilder = new StringJoiner("\r\n");
                 while (requestLines.hasMoreTokens()) {
                     String requestLine = requestLines.nextToken();
+                    if (dataBuilder.length() == 0) {
+                        //替换第一行的URL为相对路径
+                        requestLine = requestLine.replaceFirst("http://[^/]+", "");
+                    }
                     if (!requestLine.startsWith(PROXY_CONNECTION) && !requestLine.startsWith(PROXY_AUTHORIZATION)) {
                         dataBuilder.add(requestLine);
                     }
                 }
                 String httpData = dataBuilder + "\r\n\r\n";
+                log.debug("send httpData:{}", httpData);
                 sendBuffer = Buffer.buffer(httpData);
             } else {
+                //非首次请求数据
                 sendBuffer = buffer;
             }
             serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + buffer.length())

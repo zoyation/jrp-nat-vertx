@@ -107,7 +107,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         targetHost.append((char) data.getByte(i));
                     }
                     int targetPort = data.getBuffer(1 + targetHost.length() + 1, 1 + targetHost.length() + 1 + 2).getUnsignedShort(0);
-                    Buffer httpData = (protocol == SocksProxyProto.HTTP || protocol == SocksProxyProto.HTTPS) ? data.getBuffer(1 + targetHost.length() + 1 + 2, data.length()) : Buffer.buffer();
+                    Buffer sendData = (protocol == SocksProxyProto.HTTP || protocol == SocksProxyProto.HTTPS) ? data.getBuffer(1 + targetHost.length() + 1 + 2, data.length()) : Buffer.buffer();
                     final SocketAddress socketAddress = SocketAddress.inetSocketAddress(targetPort, targetHost.toString());
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, targetHost, targetPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
@@ -144,9 +144,8 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                         }
                                     });
                                     log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
-                                    webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
-                                    if (httpData.length() > 0) {
-                                        StringTokenizer tokenizer = new StringTokenizer(httpData.toString(), "\r\n");
+                                    if (sendData.length() > 0) {
+                                        StringTokenizer tokenizer = new StringTokenizer(sendData.toString(), "\r\n");
                                         boolean https;
                                         if (tokenizer.hasMoreTokens()) {
                                             //第一行是请求行，正向代理转发过来的格式为：CONNECT http://192.168.1.11:88/index.html HTTP/1.1\r\n
@@ -173,7 +172,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                                 }
                                                 //第一行替换“http://192.168.1.11:88/index.html”为“/index.html”
                                                 Buffer requestFirestLine = Buffer.buffer(firstLine.replace(url, uri));
-                                                Buffer otherBuffer = httpData.getBuffer(firstLine.length(), httpData.length());
+                                                Buffer otherBuffer = sendData.getBuffer(firstLine.length(), sendData.length());
                                                 Buffer receiveData = Buffer.buffer(requestFirestLine.length() + otherBuffer.length()).appendBuffer(requestFirestLine).appendBuffer(otherBuffer);
                                                 sendTcpData(receiveData, proxySocket);
                                             } else {
@@ -182,6 +181,9 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                         } else {
                                             throw new RuntimeException("无法解析请求！");
                                         }
+                                    } else {
+                                        //非http请求，返回给代理服务端代表连接成功
+                                        webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
                                     }
                                 }
                             } else {
