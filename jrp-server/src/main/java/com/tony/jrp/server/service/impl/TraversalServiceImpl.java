@@ -33,7 +33,7 @@ public class TraversalServiceImpl implements ITraversalService {
      */
     public static final int MIN_PORT = 1024;
     /**
-     * 允许穿透的最大端口
+     * 允许穿透的最大端口49151
      */
     public static final int MAX_PORT = 49151;
     @Autowired

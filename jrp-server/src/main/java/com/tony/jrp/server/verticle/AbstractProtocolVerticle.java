@@ -66,16 +66,7 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      * 初始化穿透服务
      */
     protected abstract void init();
-
-    /**
-     * 移除请求缓存
-     *
-     * @param requestId 请求ID
-     */
-    protected void removeRequest(Integer requestId) {
-        clientSocketMap.remove(requestId);
-    }
-
+    
     /**
      * 缓存请求
      *
@@ -100,7 +91,7 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      *
      * @param requestId 请求ID
      */
-    protected boolean cacheRequest(int requestId) {
+    protected boolean cachedRequest(int requestId) {
         return clientSocketMap.containsKey(requestId);
     }
 
@@ -124,12 +115,12 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
     protected abstract void closeRequest(T request);
 
     /**
-     * 转发向内网代理服务器返回数据给用户端
+     * 转发内网代理服务器返回数据给用户端
      *
      * @param msgType   消息类型
      * @param msgId     消息ID
      * @param requestId 客户端地址
-     * @param realData  实际数据
+     * @param data      实际数据
      */
-    protected abstract void writeData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer realData);
+    protected abstract void backData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer data);
 }

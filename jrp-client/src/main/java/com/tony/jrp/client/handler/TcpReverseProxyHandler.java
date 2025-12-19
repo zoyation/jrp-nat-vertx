@@ -1,7 +1,6 @@
 package com.tony.jrp.client.handler;
 
 import com.tony.jrp.common.enums.JRPMsgType;
-import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
@@ -9,12 +8,9 @@ import io.vertx.core.http.WebSocket;
 import io.vertx.core.net.NetClient;
 import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetSocket;
-import io.vertx.core.net.SocketAddress;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -49,23 +45,9 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
     @Override
     public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
         String proxyPass = clientProxy.getProxy_pass();
-        int originPort;
-        String originHost;
-        boolean https;
-        URL url;
-        try {
-            url = new URL(proxyPass);
-        } catch (MalformedURLException e) {
-            throw new RuntimeException(e);
-        }
-        originPort = url.getPort();
-        originHost = url.getHost();
-        String protocol = url.getProtocol().toLowerCase();
-        https = protocol.equals(ServiceType.HTTPS.name().toLowerCase());
-        if (originPort == -1) {
-            originPort = https ? 443 : 80;
-        }
-        final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
+        int originPort = clientProxy.getPort();
+        String originHost = clientProxy.getHost();
+        boolean https = clientProxy.isHttps();
         NetSocket netSocket = netSocketMap.get(clientId);
         if (netSocket != null) {
             sendTcpData(originHost, proxyPass, data, netSocket);
@@ -87,7 +69,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                         clientOptions.setTrustAll(true);
                     }
                     NetClient netClient = vertx.createNetClient(clientOptions);
-                    netClient.connect(socketAddress, asyncResult -> {
+                    netClient.connect(originPort, originHost, asyncResult -> {
                         try {
                             if (asyncResult.succeeded()) {
                                 NetSocket proxySocket = asyncResult.result();
@@ -112,9 +94,9 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                                 if (data.length() > 0) {
                                     sendTcpData(originHost, proxyPass, data, proxySocket);
                                 }
-                                log.info("内网代理连接到{}:{}成功！", socketAddress.host(), socketAddress.port());
+                                log.info("内网代理连接到{}:{}成功！", originHost, originPort);
                             } else {
-                                log.error("内网代理连接到{}:{}失败：{}！", socketAddress.host(), socketAddress.port(), asyncResult.cause().getMessage(), asyncResult.cause());
+                                log.error("内网代理连接到{}:{}失败：{}！", originHost, originPort, asyncResult.cause().getMessage(), asyncResult.cause());
                             }
                         } catch (Exception e) {
                             log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);

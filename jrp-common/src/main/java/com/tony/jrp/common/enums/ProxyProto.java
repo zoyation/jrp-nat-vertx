@@ -13,7 +13,7 @@ import java.io.Serializable;
  * UDP: socks5 UDP代理
  */
 @Getter
-public enum SocksProxyProto implements Serializable {
+public enum ProxyProto implements Serializable {
     HTTP((byte) 0X01),
     HTTPS((byte) 0X02),
     SOCK4_TCP((byte) 0X03),
@@ -30,7 +30,7 @@ public enum SocksProxyProto implements Serializable {
      *
      * @param proto 穿透协议
      */
-    SocksProxyProto(byte proto) {
+    ProxyProto(byte proto) {
         this.proto = proto;
     }
 
@@ -40,8 +40,8 @@ public enum SocksProxyProto implements Serializable {
      * @param proto 穿透协议
      * @return SocksProxyProto
      */
-    public static SocksProxyProto getByProto(byte proto) {
-        for (SocksProxyProto value : values()) {
+    public static ProxyProto getByProto(byte proto) {
+        for (ProxyProto value : values()) {
             if (value.proto == proto) {
                 return value;
             }

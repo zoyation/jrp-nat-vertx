@@ -2,9 +2,13 @@ package com.tony.jrp.client.service.impl;
 
 import com.tony.jrp.client.config.ProxyClientConfig;
 import com.tony.jrp.client.config.ProxyClientProperties;
-import com.tony.jrp.client.handler.*;
+import com.tony.jrp.client.handler.AbstractProxyHandler;
+import com.tony.jrp.client.handler.ForwardProxyHandler;
+import com.tony.jrp.client.handler.TcpReverseProxyHandler;
+import com.tony.jrp.client.handler.UdpReverseProxyHandler;
 import com.tony.jrp.client.service.IConfigService;
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
@@ -26,13 +30,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -70,6 +78,13 @@ public class ProxyClientManager implements InitializingBean {
      * 消息类型、端口和请求id byte长度
      */
     public static final int TYPE_PORT_REQUEST_ID_LEN = JRPMsgType.TYPE_LEN + 2 + 4;
+    /**
+     * 重连间隔5秒
+     */
+    public static final int RECONNECT_DELAY = 5000;
+    /**
+     * ping间隔2秒
+     */
     public static final int PING_DELAY = 2000;
     @Autowired
     protected Vertx vertx;
@@ -84,33 +99,17 @@ public class ProxyClientManager implements InitializingBean {
     @Autowired
     protected ProxyClientProperties properties;
 
+    private HttpServer server;
     private final Object serverLock = new Object();
     List<ClientProxy> clientProxyList = new ArrayList<>();
-    private HttpServer server;
     private int registerPort;
     private String registerHost;
-    private volatile Integer reconnectionTimes = 0;
     //registerWebSocket为null，未注册
     private volatile WebSocket registerWebSocket = null;
     private volatile Long pingTimerId = null;
+    private final AtomicInteger reconnectionTimes = new AtomicInteger(0);
     private String errorMessage = "";
-    /**
-     * TCP代理处理器
-     */
-    private AbstractProxyHandler tcpProxyHandler = null;
-    /**
-     * UDP代理处理器
-     */
-    private AbstractProxyHandler udpProxyHandler = null;
-
-    /**
-     * http正向代理穿透处理器
-     */
-    private AbstractProxyHandler httpForwardHandler = null;
-    /**
-     * http/https/socks4/socks4a/socks5等正向代理穿透处理器
-     */
-    private AbstractProxyHandler forwardProxyHandler = null;
+    private final Map<ServiceType, AbstractProxyHandler> handlerMap = new ConcurrentHashMap<>();
 
     @Data
     private static class RegisterStatus {
@@ -178,32 +177,20 @@ public class ProxyClientManager implements InitializingBean {
      */
     private void closeAndCreateProxyHandler() throws IOException {
         closeProxyHandler();
-        tcpProxyHandler = new TcpReverseProxyHandler(vertx);
-        udpProxyHandler = new UdpReverseProxyHandler(vertx);
-        httpForwardHandler = new HttpForwardProxyHandler(vertx);
-        forwardProxyHandler = new ForwardProxyHandler(vertx);
+        handlerMap.put(ServiceType.TCP, new TcpReverseProxyHandler(vertx));
+        handlerMap.put(ServiceType.UDP, new UdpReverseProxyHandler(vertx));
+        handlerMap.put(ServiceType.SMART_PROXY, new ForwardProxyHandler(vertx));
     }
 
     /**
      * 关闭代理处理器
      */
     private void closeProxyHandler() throws IOException {
-        if (tcpProxyHandler != null) {
-            log.info("停止TCP穿透转发服务");
-            tcpProxyHandler.close();
+        for (Map.Entry<ServiceType, AbstractProxyHandler> entry : handlerMap.entrySet()) {
+            log.info("停止[{}]穿透转发服务", entry.getKey().name());
+            entry.getValue().close();
         }
-        if (udpProxyHandler != null) {
-            log.info("停止UDP穿透转发服务");
-            udpProxyHandler.close();
-        }
-        if (httpForwardHandler != null) {
-            log.info("停止http正向代理穿透转发服务");
-            httpForwardHandler.close();
-        }
-        if (forwardProxyHandler != null) {
-            log.info("停止socks正向代理穿透转发服务");
-            forwardProxyHandler.close();
-        }
+        handlerMap.clear();
     }
 
     private HttpServer startServer(ProxyClientConfig newConfig) {
@@ -272,7 +259,7 @@ public class ProxyClientManager implements InitializingBean {
             }
             this.server = startServer(newConfig);
         }
-        reconnectionTimes = 0;
+        reconnectionTimes.set(0);
         if (registerWebSocket != null) {
             registerWebSocket.close().onComplete(r -> {
                 registerWebSocket = null;
@@ -290,19 +277,44 @@ public class ProxyClientManager implements InitializingBean {
      */
     private void startRegister(List<ClientProxy> remoteProxies) {
         try {
+            List<ClientProxy> registerProxies;
+            if (remoteProxies != null) {
+                registerProxies = remoteProxies;
+            } else {
+                registerProxies = Collections.emptyList();
+            }
+            if (registerProxies.isEmpty()) {
+                log.warn("没有穿透配置信息，配置穿透信息后进行注册！");
+                return;
+            }
             ClientRegister register = new ClientRegister();
             register.setId(CPUUtils.getCpuId());
             register.setToken(properties.getToken());
             register.setUsername(properties.getUsername());
             register.setPassword(properties.getPassword());
-            List<ClientProxy> registerProxies = new ArrayList<>();
-            if (remoteProxies != null) {
-                registerProxies.addAll(remoteProxies);
+            for (ClientProxy proxy : registerProxies) {
+                //格式 host:port
+                String proxyPass = proxy.getProxy_pass();
+                if (StringUtils.hasText(proxyPass)) {
+                    //去掉http://、https://等前缀
+                    String lowerCasePass = proxyPass.toLowerCase().trim();
+                    boolean https = lowerCasePass.startsWith("https");
+                    proxy.setHttps(https);
+                    proxyPass = lowerCasePass.replaceAll("^https?://", "");
+                    int index = proxyPass.lastIndexOf(":");
+                    if (index > 0) {
+                        proxy.setHost(proxyPass.substring(0, index));
+                        proxy.setPort(Integer.parseInt(proxyPass.substring(index + 1)));
+                    } else {
+                        proxy.setHost(proxyPass);
+                        proxy.setPort(https ? 443 : 80);
+                    }
+                }
             }
             register.setProxies(registerProxies);
             Map<Integer, ClientProxy> remotePortClientMap = registerProxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r));
             log.info("开始注册...");
-            if (reconnectionTimes < properties.getReconnectionTimes()) {
+            if (reconnectionTimes.get() < properties.getReconnectionTimes()) {
                 vertx.setTimer(1, registerTimerHandler(register, remotePortClientMap));
             }
         } catch (Exception e) {//注册失败
@@ -320,23 +332,21 @@ public class ProxyClientManager implements InitializingBean {
      * @return 定时器ID
      */
     private Handler<Long> registerTimerHandler(ClientRegister register, Map<Integer, ClientProxy> remotePortClientMap) {
-        return id -> {
-            tryRegister(register, remotePortClientMap).onComplete(r -> {
-                if (r.succeeded() && r.result()) {
-                    reconnectionTimes = 0;
-                    log.info("内网穿透注册成功！");
+        return id -> tryRegister(register, remotePortClientMap).onComplete(r -> {
+            if (r.succeeded() && r.result()) {
+                reconnectionTimes.set(0);
+                log.info("内网穿透注册成功！");
+            } else {
+                log.error("内网穿透注册失败！");
+                if (reconnectionTimes.get() >= properties.getReconnectionTimes()) {
+                    log.warn("与外网穿透服务断开连接或未注册，断线重连次数已达限制次数[{}]，不再重连!", properties.getReconnectionTimes());
                 } else {
-                    log.error("内网穿透注册失败！");
-                    if (reconnectionTimes >= properties.getReconnectionTimes()) {
-                        log.warn("与外网穿透服务断开连接或未注册，断线重连次数已达限制次数[{}]，不再重连!", properties.getReconnectionTimes());
-                    } else {
-                        reconnectionTimes = reconnectionTimes + 1;
-                        //5秒后重连
-                        vertx.setTimer(5000, registerTimerHandler(register, remotePortClientMap));
-                    }
+                    reconnectionTimes.incrementAndGet();
+                    //5秒后重连
+                    vertx.setTimer(RECONNECT_DELAY, registerTimerHandler(register, remotePortClientMap));
                 }
-            });
-        };
+            }
+        });
     }
 
     /**
@@ -345,8 +355,8 @@ public class ProxyClientManager implements InitializingBean {
      * @return true:注册成功，false:注册失败
      */
     private Future<Boolean> tryRegister(ClientRegister register, Map<Integer, ClientProxy> remotePortClientMap) {
-        if (reconnectionTimes == 0) {
-            log.info("与外网穿透服务断开或首次注册或配置变动，开始注册...", reconnectionTimes);
+        if (reconnectionTimes.get() == 0) {
+            log.info("与外网穿透服务断开或首次注册或配置变动，开始注册...");
         } else {
             log.info("与外网穿透服务断开连接或注册失败，尝试第[{}]次注册...", reconnectionTimes);
         }
@@ -382,7 +392,7 @@ public class ProxyClientManager implements InitializingBean {
                         if (registerWebSocket != null) {
                             registerWebSocket = null;
                             //5秒后重连
-                            vertx.setTimer(5000, registerTimerHandler(register, remotePortClientMap));
+                            vertx.setTimer(RECONNECT_DELAY, registerTimerHandler(register, remotePortClientMap));
                         }
                     }
                 });
@@ -456,8 +466,8 @@ public class ProxyClientManager implements InitializingBean {
                                             pongReceived.set(false);
                                             webSocket.writePing(Buffer.buffer("ping")).timeout(1, TimeUnit.SECONDS).onFailure(cause -> {
                                                 log.error("ping失败：{}", cause.getMessage(), cause);
-                                                vertx.cancelTimer(id);
-                                                webSocket.close();
+                                                //vertx.cancelTimer(id);
+                                                //webSocket.close();
                                             });
                                         } else {
                                             log.warn("未收到服务端[{}]pong消息！", registerWebSocket.remoteAddress().toString());
@@ -555,17 +565,17 @@ public class ProxyClientManager implements InitializingBean {
             case HTTP:
             case HTTPS:
             case TCP:
-                tcpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
+                handlerMap.get(ServiceType.TCP).handle(webSocket, msgType, msgId, requestId, proxy, data);
                 break;
             case UDP:
-                udpProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
+                handlerMap.get(ServiceType.UDP).handle(webSocket, msgType, msgId, requestId, proxy, data);
                 break;
             case HTTP_PROXY:
             case HTTPS_PROXY:
             case SOCKS4:
             case SOCKS5:
             case SMART_PROXY:
-                forwardProxyHandler.handle(webSocket, msgType, msgId, requestId, proxy, data);
+                handlerMap.get(ServiceType.SMART_PROXY).handle(webSocket, msgType, msgId, requestId, proxy, data);
                 break;
         }
     }

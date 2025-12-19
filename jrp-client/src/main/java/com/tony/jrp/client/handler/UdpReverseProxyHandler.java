@@ -7,7 +7,6 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramSocket;
 import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.WebSocket;
-import io.vertx.core.net.SocketAddress;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -64,12 +63,8 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
 
     @Override
     public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
-        int originPort;
-        String originHost;
-        String[] ipPort = clientProxy.getProxy_pass().split(":");
-        originHost = ipPort[0];
-        originPort = Integer.parseInt(ipPort[1]);
-        final SocketAddress socketAddress = SocketAddress.inetSocketAddress(originPort, originHost);
+        String originHost = clientProxy.getHost();
+        int originPort = clientProxy.getPort();
         DatagramSocket netSocket = datagramSocketMap.get(clientId);
         if (netSocket != null) {
             sendUdpData(clientId, data, netSocket, originPort, originHost);
@@ -80,7 +75,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
                     //buffer第一个字符为消息标志符，后面是客户端远程ID(ip+端口)长度2位+远程ID
                     sendUdpData(clientId, data, netSocket, originPort, originHost);
                 } else {
-                    log.info("收到UPD数据[{}]，准备发送到[{}:{}]！", clientId, socketAddress.host(), socketAddress.port());
+                    log.info("收到UPD数据[{}]，准备发送到[{}:{}]！", clientId, originHost, originPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
                     // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
                     DatagramSocketOptions clientOptions = new DatagramSocketOptions();

@@ -1,4 +1,4 @@
-# JRP 内网穿透快速上手指南
+# JRP内网穿透快速上手指南
 ## 一、下载解压
 1. **服务端（部署在外网服务器）：** https://gitee.com/java-tony/jrp-nat-vertx/releases/download/v1.1.0/jrp-server-1.1.0.zip
 2. **客户端（部署在内网机器，连接服务端）：** https://gitee.com/java-tony/jrp-nat-vertx/releases/download/v1.1.0/jrp-client-1.1.0.zip
@@ -33,15 +33,17 @@
 3. 直接输入内网地址访问所有服务
 
 
-## 四、正向代理穿透配置和访问
-### win11配置
+## 四、用户电脑配置和访问
+用户使用时支持多种方式，可借助第三方用户端代理软件，也可以直接通过windows或浏览器配置代理。
+下面介绍windows代理配置使用和Chrome浏览器配置使用：
+### 1、win11配置
 1. **打开设置界面：**"开始"->"设置"->"网络和 Internet"->"代理"->"手动设置代理"->"编辑" 
-2. **代理IP地址：** 值可设置为http=外网IP:1080;socks=外网IP:1080
+2. **代理IP地址(只支持socks4)：** 值可设置为http=外网IP:1080;socks=外网IP:1080
 3. **请勿对以下列条目开头的地址使用代理服务：** 值设置为https://*;127.0.0.1;外网IP;http://www.*;functional.events.data.microsoft.com;chinanorth3-0.in.applicationinsights.azure.cn;access-point.cloudmessaging.edge.microsoft.com
 4. **首次访问：** 需访问 http://WANIP:1080 认证，输入穿透客户端application.yml里配置的用户名和密码（client，10086）进行认证
 5. **访问内网服务：** 输入内网服务地址访问内网服务
 
-### Google Chrome浏览器配置
+### 2、Google Chrome浏览器配置
 1. **找到chrome.exe浏览器的路径：** 比如C:\Program Files\Google\Chrome\Application\chrome.exe
 2. **创建chrome代理快捷方式：** 右键chrome.exe，选择"发送到"->"桌面快捷方式", 然后到桌面选择快捷方式右键->属性->目标地址后面填写代理地址：
    - "C:\Program Files\Google\Chrome\Application\chrome.exe" --proxy-server="http://WANIP:1080"并双击快捷方式运行

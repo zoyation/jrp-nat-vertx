@@ -66,7 +66,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             Handler<Buffer> dataHandler = data -> {
                 receiveDataFlag.set(true);
                 //authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
-                boolean authorized = (!httpFlag && securityService.authorized(host)) || this.cacheRequest(requestId);
+                boolean authorized = (!httpFlag && securityService.authorized(host)) || this.cachedRequest(requestId);
                 //未授权非HTTP请求都屏蔽
                 if (!authorized && !securityService.isHTTPRequest(data)) {
                     log.warn("关闭非HTTP(S)类型未授权请求[{}]！", clientAddress);
@@ -125,7 +125,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             };
             Handler<Void> closeHandler = voidHandler -> {
                 log.debug("客户端[{}]连接关闭！", clientAddress);
-                if (this.cacheRequest(requestId)) {
+                if (this.cachedRequest(requestId)) {
                     this.removeCacheAndClose(requestId);
                     //log.warn("客户端连接关闭，丢弃收到的内网代理服务器返回信息，并通知内网服务器断开连接[{}]！", clientAddress);
                     //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
@@ -179,7 +179,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
     }
 
     @Override
-    public void writeData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer realData) {
+    public void backData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer data) {
         NetSocket clientNetSocket = this.getRequest(requestId);
         if (clientNetSocket != null) {
             SocketAddress remoteAddress = clientNetSocket.remoteAddress();
@@ -188,7 +188,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                 this.removeCacheAndClose(requestId);
             } else if (JRPMsgType.RESPONSE == msgType) {
                 log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", remoteAddress);
-                clientNetSocket.write(realData);
+                clientNetSocket.write(data);
                 if (clientNetSocket.writeQueueFull()) {
                     clientNetSocket.pause();
                     clientNetSocket.drainHandler(done -> clientNetSocket.resume());

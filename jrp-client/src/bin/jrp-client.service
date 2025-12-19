@@ -8,7 +8,7 @@ User=root
 WorkingDirectory=/home/jrp-client
 ExecStart=/usr/bin/java -Dfile.encoding=utf-8 -Dspring.config.location=./application.yml -jar jrp-client.jar
 Restart=on-failure
-RestartSec=10
-
+RestartSec=2
+SuccessExitStatus=143
 [Install]
 WantedBy=multi-user.target

@@ -133,11 +133,11 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
     }
 
     @Override
-    public void writeData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer realData) {
+    public void backData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer data) {
         log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", requestId);
         DatagramPacket datagramPacket = this.getRequest(requestId);
         if (datagramPacket != null) {
-            datagramSocket.send(realData, datagramPacket.sender().port(), datagramPacket.sender().host());
+            datagramSocket.send(data, datagramPacket.sender().port(), datagramPacket.sender().host());
         }
     }
 

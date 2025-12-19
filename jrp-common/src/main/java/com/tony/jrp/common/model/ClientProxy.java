@@ -22,6 +22,16 @@ public class ClientProxy implements Serializable {
      * 服务地址
      */
     private String proxy_pass;
+
+    private boolean https;
+    /**
+     * 服务ip/domain
+     */
+    private String host;
+    /**
+     * 服务端口
+     */
+    private Integer port;
     /**
      * 穿透类型 默认HTTP
      */

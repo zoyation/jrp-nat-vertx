@@ -5,7 +5,6 @@ import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.server.service.impl.SecurityService;
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.Future;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ServerWebSocket;
 import lombok.Getter;
@@ -49,9 +48,12 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
     @Getter
     private final ClientRegister clientRegister;
     /**
-     * 所有代理Verticle
+     * 知名端口（0-1023）‌：这些端口通常被系统服务或标准应用协议占用
+     * 动态/私有端口（49152-65535）：这些端口由操作系统临时分配给客户端进程，用于短期通信，例如浏览器发起的UDP请求。
+     * 注册端口（1024-49151）‌：这些端口可由用户进程或应用程序动态分配，常见于自定义服务或特定软件。
+     * 所有代理Verticle,key：注册端口（1024-49151），用户可注册用于特定服务。
      */
-    private final Map<Integer, AbstractProtocolVerticle> verticleMap = new ConcurrentHashMap<>();
+    private final Map<Integer, AbstractProtocolVerticle<?>> verticleMap = new ConcurrentHashMap<>();
 
 
     /**
@@ -83,12 +85,12 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
             //获取消息标识：代理端口+请求id
             Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN);
             Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
-            AbstractProtocolVerticle verticle = verticleMap.get(remotePort);
+            AbstractProtocolVerticle<?> verticle = verticleMap.get(remotePort);
             if (verticle == null) {
                 log.warn("端口[{}]收到内网代理服务返回消息，但是未找到端口对应代理，客户端标识id[{}]对应连接已经失效，发送关闭连接消息到内网代理服务！", remotePort, requestId);
                 serverSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
             } else {
-                verticle.writeData(msgType, msgId, requestId, realData);
+                verticle.backData(msgType, msgId, requestId, realData);
             }
         });
         //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端
@@ -100,7 +102,7 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                     continue;
                 }
             }
-            AbstractProtocolVerticle verticle;
+            AbstractProtocolVerticle<?> verticle;
             switch (clientProxy.getType()) {
                 case HTTPS:
                 case HTTP:
@@ -122,8 +124,9 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                 default:
                     throw new Exception("不支持代理类型：" + clientProxy.getType().name() + "！");
             }
-            Future<String> tcpFuture = vertx.deployVerticle(verticle);
-            tcpFuture.onSuccess(id -> verticleMap.put(remotePort, verticle)).onFailure(Throwable::printStackTrace);
+            vertx.deployVerticle(verticle)
+                    .onSuccess(id -> verticleMap.put(remotePort, verticle))
+                    .onFailure(Throwable::printStackTrace);
         }
     }
 
