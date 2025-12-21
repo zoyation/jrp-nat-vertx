@@ -50,12 +50,12 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
         boolean https = clientProxy.isHttps();
         NetSocket netSocket = netSocketMap.get(clientId);
         if (netSocket != null) {
-            sendTcpData(originHost, proxyPass, data, netSocket);
+            sendTcpData(clientProxy, data, netSocket);
         } else {
             synchronized (netSocketMap) {
                 netSocket = netSocketMap.get(clientId);
                 if (netSocket != null) {
-                    sendTcpData(originHost, proxyPass, data, netSocket);
+                    sendTcpData(clientProxy, data, netSocket);
                 } else {
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, originHost, originPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
@@ -92,7 +92,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                                 });
                                 //转发返回消息到内网真实服务器
                                 if (data.length() > 0) {
-                                    sendTcpData(originHost, proxyPass, data, proxySocket);
+                                    sendTcpData(clientProxy, data, proxySocket);
                                 }
                                 log.info("内网代理连接到{}:{}成功！", originHost, originPort);
                             } else {
@@ -119,15 +119,30 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
     /**
      * 发送TCP数据
      *
-     * @param originHost 原始服务主机
-     * @param proxyPass  代理服务地址
-     * @param data       数据
-     * @param netSocket  数据发送对象
+     * @param clientProxy 代理配置信息
+     * @param data        数据
+     * @param netSocket   数据发送对象
      */
-    private static void sendTcpData(String originHost, String proxyPass, Buffer data, NetSocket netSocket) {
-        if (data.toString().contains("Host:")) {
+    private static void sendTcpData(ClientProxy clientProxy, Buffer data, NetSocket netSocket) {
+        String dataStr = data.toString();
+        if (dataStr.contains("Host:")) {
             //替换Host和Referer值，避免被内网服务器拦截
-            netSocket.write(Buffer.buffer(data.toString().replaceAll("Host: .*", "Host: " + originHost).replaceAll("Referer:.*", "referer: " + proxyPass)));
+            // 替换 Host 值
+            dataStr = dataStr.replaceAll("Host: .*", "Host: " + clientProxy.getHost() + ":" + clientProxy.getPort());
+            // 替换 Referer 值，保持协议一致性
+            // 更完善的处理方式
+            if (dataStr.contains("Referer:")) {
+                //获取Referer值
+                int index = dataStr.indexOf("Referer: ");
+                String referer = dataStr.substring(index + "Referer: ".length(), dataStr.indexOf("\r\n", index));
+                int uriIndex = referer.indexOf("/", 7);
+                if (uriIndex != -1) {
+                    dataStr = dataStr.replace(referer, clientProxy.getProxy_pass() + referer.substring(uriIndex));
+                } else {
+                    dataStr = dataStr.replace(referer, clientProxy.getProxy_pass());
+                }
+            }
+            netSocket.write(Buffer.buffer(dataStr));
         } else {
             netSocket.write(data);
         }

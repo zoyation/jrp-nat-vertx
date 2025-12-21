@@ -69,7 +69,7 @@ public class ProxyClientManager implements InitializingBean {
     /**
      * 写队列最大长度100
      */
-    public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    public static final int WRITE_QUEUE_MAX_SIZE = 16384;
     /**
      * 消息类型和端口byte长度
      */
@@ -591,9 +591,9 @@ public class ProxyClientManager implements InitializingBean {
         options.setConnectTimeout(CONNECT_TIMEOUT);
         options.setIdleTimeout(IDLE_TIMEOUT);
         //设置最大消息长度，4M
-        options.setMaxMessageSize(BUFFER_SIZE * 2);
+        options.setMaxMessageSize(BUFFER_SIZE);
         //设置最大帧长度，8M
-        options.setMaxFrameSize(BUFFER_SIZE * 4);
+        options.setMaxFrameSize(BUFFER_SIZE);
         //设置ssl
         options.setSsl(this.properties.getSsl());
         options.setTrustAll(true);
