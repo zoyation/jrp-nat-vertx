@@ -62,7 +62,7 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
             SocketAddress socketAddress = packet.sender();
             log.debug("[{}] 收到UDP数据!", socketAddress.toString());
             if (securityService.authorized(socketAddress.host())) {
-                String clientAddress = socketAddress.toString();
+                //String clientAddress = socketAddress.toString();
                 // 请求唯一标识
                 int requestId = socketAddress.hashCode();
                 this.cacheRequest(requestId, packet);

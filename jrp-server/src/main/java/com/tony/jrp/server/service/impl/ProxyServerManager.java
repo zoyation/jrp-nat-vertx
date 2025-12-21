@@ -125,9 +125,9 @@ public class ProxyServerManager implements InitializingBean {
                     String prettily;
                     try {
                         prettily = new JsonObject(registerJson).encodePrettily();
-                        log.info("收到来自[{}]的服务注册信息:\r\n{}", remoteAddress, prettily);
+                        log.info("收到来自[{}]的服务注册信息:\n{}", remoteAddress, prettily);
                     } catch (Exception e) {
-                        log.error("收到来自[{}]的非法注册信息:\r\n{}", remoteAddress, registerJson, e);
+                        log.error("收到来自[{}]的非法注册信息:\n{}", remoteAddress, registerJson, e);
                         serverWebSocket.close();
                         return;
                     }

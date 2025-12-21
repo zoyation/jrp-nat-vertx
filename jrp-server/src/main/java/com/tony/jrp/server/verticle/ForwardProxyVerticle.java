@@ -25,7 +25,6 @@ import org.springframework.util.StringUtils;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.StringJoiner;
 import java.util.StringTokenizer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -271,7 +270,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                             socket.close();
                         }
                     } else if (clientProxy.getType() == ServiceType.SOCKS4 || clientProxy.getType() == ServiceType.SOCKS5 || clientProxy.getType() == ServiceType.SMART_PROXY) {
-                        //支持socks无认证代理，需要先做http认证
+                        //socks4或者socks5用户端未配置认证时，配置代理时必须要把代理服务器配置到例外里面（不走代理访问，如果不配置无法认证）,然后访问代理ip和端口进行http(s)认证
                         if (securityService.authorizeHttp(clientRegister, host, buffer)) {
                             //http认证成功，只返回ok，可以客户端配置socks方式访问内网
                             socket.end(Buffer.buffer(securityService.getOKResponse()));
@@ -403,18 +402,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
      * @return 移除代理信息后的数据
      */
     private static Buffer removeHttpProxy(String bufferStr) {
-        int bodyIndex = bufferStr.indexOf("\r\n\r\n");
-        if (bodyIndex == -1) {
-            log.info("bodyIndex-1:{}", bufferStr);
-            return Buffer.buffer(bufferStr);
-        }
-        String requestLineAndHeader = bufferStr.substring(0, bodyIndex);
-        StringTokenizer requestLines = new StringTokenizer(requestLineAndHeader, "\r\n");
-        boolean connection = bufferStr.contains("\r\nConnection: ");
-        if (connection) {
-            log.info("ConnectionBuffer:{}", bufferStr);
-        }
-        StringJoiner dataBuilder = new StringJoiner("\r\n"); // 使用 StringBuilder 替代 StringJoiner 并修正换行符
+        StringTokenizer requestLines = new StringTokenizer(bufferStr, "\r\n", true);
+        boolean connection = bufferStr.contains("\nConnection: ");
+        StringBuilder dataBuilder = new StringBuilder(); // 使用 StringBuilder 替代 StringJoiner 并修正换行符
         while (requestLines.hasMoreTokens()) {
             String requestLine = requestLines.nextToken();
             if (dataBuilder.length() == 0) {
@@ -422,18 +412,24 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 requestLine = requestLine.replaceFirst("(https|http)://[^/]+", "");
             }
             if (requestLine.startsWith(PROXY_AUTHORIZATION)) {
+                if (requestLines.hasMoreTokens()) {
+                    requestLines.nextToken();
+                }
                 continue;
             }
             if (requestLine.startsWith(PROXY_CONNECTION)) {
                 if (!connection) {
                     requestLine = requestLine.replace(PROXY_CONNECTION, "Connection");
                 } else {
+                    if (requestLines.hasMoreTokens()) {
+                        requestLines.nextToken();
+                    }
                     continue;
                 }
             }
-            dataBuilder.add(requestLine); // 正确地追加换行符
+            dataBuilder.append(requestLine);
         }
-        return Buffer.buffer(dataBuilder + bufferStr.substring(requestLineAndHeader.length()));
+        return Buffer.buffer(dataBuilder.toString());
     }
 
     /**

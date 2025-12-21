@@ -19,7 +19,7 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      * 读写超时时间，单位秒
      */
     public static final int IDLE_TIMEOUT = 10;
-    public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    public static final int WRITE_QUEUE_MAX_SIZE = 16384;
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     public static final int MSG_BYTE_SIZE = 6;
 
@@ -66,7 +66,7 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      * 初始化穿透服务
      */
     protected abstract void init();
-    
+
     /**
      * 缓存请求
      *
