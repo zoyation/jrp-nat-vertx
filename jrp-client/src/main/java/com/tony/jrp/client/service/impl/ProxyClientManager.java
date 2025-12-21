@@ -473,7 +473,7 @@ public class ProxyClientManager implements InitializingBean {
                                             log.warn("未收到服务端[{}]pong消息！", registerWebSocket.remoteAddress().toString());
                                         }
                                     });
-                                    log.info("注册成功：\r\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
+                                    log.info("注册成功：\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
                                     registerPromise.tryComplete(true);
                                 } else {
                                     registerWebSocket = null;
@@ -506,7 +506,7 @@ public class ProxyClientManager implements InitializingBean {
                     }
                 });
                 String registerInfo = Json.encodePrettily(register);
-                log.info("开始发送注册消息：\r\n{}", registerInfo);
+                log.info("开始发送注册消息：\n{}", registerInfo);
                 webSocket.write(Buffer.buffer(JRPMsgType.REGISTER.codeArray()).appendBuffer(Buffer.buffer(registerInfo))).onComplete((rt) -> {
                     if (rt.succeeded()) {
                         log.info("发送注册消息成功，等待返回!");

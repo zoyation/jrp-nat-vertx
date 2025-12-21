@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
 
     public static final String CERTIFICATE_UNKNOWN = "certificate_unknown";
+    public static final String AUTHORIZATION = "Authorization";
 
     private NetServer server;
 
@@ -81,6 +82,10 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                     } else {
                         log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
                         this.cacheRequest(requestId, clientSocket);
+                        if (securityService.isHTTPRequest(data)) {
+                            //移除data里面的Authorization: Digest
+                            data = securityService.removeHead(data.toString(), AUTHORIZATION);
+                        }
                         serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
                         if (serverSocket.writeQueueFull()) {
                             serverSocket.pause();
@@ -99,6 +104,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                             if (httpFlag) {
                                 log.debug("HTTP(S)客户端[{}]请求验证通过，开始转发消息!", clientAddress);
                                 this.cacheRequest(requestId, clientSocket);
+                                //移除data里面的Authorization: Digest
+                                data = securityService.removeHead(data.toString(), AUTHORIZATION);
                                 serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
                             } else {
                                 log.debug("非HTTP(S)客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);

@@ -18,10 +18,7 @@ import org.springframework.util.StringUtils;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -361,16 +358,6 @@ public class SecurityService implements InitializingBean {
         return TokenUtils.MD5(host + TokenUtils.runtimeToken);
     }
 
-    public String getHttpWarnResponse() {
-        return "HTTP/1.1 " + HttpResponseStatus.FORBIDDEN + "\r\n" +  //响应头第一行
-                "Content-Type: text/html; charset=utf-8\r\n" +  //简单放一个头部信息
-                "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
-                "Pragma: no-cache\r\n" +
-                "Expires: 0\r\n" +
-                "\r\n" +  //这个空行是来分隔请求头与请求体的
-                "<h1>HTTP NOT SUPPORT!</h1>\r\n";
-    }
-
     public String getOKResponse() {
         return "HTTP/1.1 " + HttpResponseStatus.OK + "\r\n" +  //响应头第一行
                 "Content-Type: text/html; charset=utf-8\r\n" +  //简单放一个头部信息
@@ -379,16 +366,6 @@ public class SecurityService implements InitializingBean {
                 "Expires: 0\r\n" +
                 "\r\n" +  //这个空行是来分隔请求头与请求体的
                 "<h1>OK</h1>\r\n";
-    }
-
-    public String getNotHttpSuccessResponse() {
-        return "HTTP/1.1 " + HttpResponseStatus.FORBIDDEN + "\r\n" +  //响应头第一行
-                "Content-Type: text/html; charset=utf-8\r\n" +  //简单放一个头部信息
-                "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
-                "Pragma: no-cache\r\n" +
-                "Expires: 0\r\n" +
-                "\r\n" +  //这个空行是来分隔请求头与请求体的
-                "<h1>非HTTP请求用户名密码验证通过!</h1>\r\n";
     }
 
     public boolean isHTTPRequest(Buffer data) {
@@ -481,5 +458,38 @@ public class SecurityService implements InitializingBean {
         Executors.newScheduledThreadPool(1).scheduleAtFixedRate(() -> {
             authorizedHostSet.entrySet().removeIf(r -> r.getValue() < System.currentTimeMillis());
         }, 0, 10, TimeUnit.SECONDS);
+    }
+
+    /**
+     * 移除Authorization信息
+     *
+     * @param httpData 请求数据
+     * @return 移除Authorization信息后的数据
+     */
+    public Buffer removeHead(String httpData, String headName) {
+        String prefix = headName + ": ";
+        //去掉指定head头
+        boolean contains = httpData.contains("\r\n" + prefix);
+        if (!contains) {
+            return Buffer.buffer(httpData);
+        }
+        StringBuilder builder = new StringBuilder();
+        StringTokenizer requestLines = new StringTokenizer(httpData, "\r\n", true);
+        while (requestLines.hasMoreTokens()) {
+            String requestLine = requestLines.nextToken();
+            if (requestLine.startsWith(prefix)) {
+                //去掉后面回车换行
+                if (requestLines.hasMoreTokens()) {
+                    requestLines.nextToken();
+                }
+                if (requestLines.hasMoreTokens()) {
+                    requestLines.nextToken();
+                }
+                continue;
+            }
+            builder.append(requestLine);
+        }
+        log.debug("removeHead: {}", builder);
+        return Buffer.buffer(builder.toString());
     }
 }

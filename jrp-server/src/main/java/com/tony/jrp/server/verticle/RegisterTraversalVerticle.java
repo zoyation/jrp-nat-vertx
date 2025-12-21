@@ -32,7 +32,7 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      * ”ip:端口“地址总长度数值对应字符串长度。
      */
     public static final int CLIENT_IP_PORT_LEN = 2;
-    public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    public static final int WRITE_QUEUE_MAX_SIZE = 16384;
     public static final int TYPE_AND_MSG_ID_BYTE_SIZE = 9;
     /**
      * 持有和内网代理服务器的连接，收到客户端请求消息后，通知内网代理服务器
