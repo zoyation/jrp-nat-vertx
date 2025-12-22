@@ -73,8 +73,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
     private static final byte SOCKS5_REPLY_GENERAL_FAILURE = 0x01;
     // SOCKS4 响应：成功
     private static final byte SOCKS4_REPLY_SUCCEEDED = 0x5A;
-    public static final String PROXY_CONNECTION = "Proxy-Connection";
+    public static final String PROXY_CONNECTION = "Proxy-Connection:";
     public static final String ALL_HOST = "0.0.0.0";
+    public static final String CONNECT = "CONNECT ";
     /**
      * 创建TCP服务器用于http代理、SOCKS代理穿透
      */
@@ -203,9 +204,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
             //socks5无认证（用户名、密码认证）时，需要先通过浏览器访问"http://代理ip:代理端口"进行认证，然后才能通过socks5协议进行UDP、TCP转发，否则直接关闭连接。
             //Proxy-Authorization: Digest
             //是否为HTTP请求，报文以CONNECT或GET开头需要进行http认证
-            log.debug("httpAuthData:{}", buffer.toString());
             boolean httpFlag = securityService.isHTTPRequest(buffer);
             if (httpFlag) {
+                log.debug("httpAuthData:{}", buffer.toString());
                 String bufferStr = buffer.toString();
                 log.debug("收到[{}]客户端数据[{}]！", remoteAddress.toString(), bufferStr);
                 //处理http认证
@@ -215,12 +216,15 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 String[] methodAndUrl = bufferStr.split(" ", 3);
                 HttpMethod method = HttpMethod.valueOf(methodAndUrl[0]);
                 String url = methodAndUrl[1];
+                boolean httpsConnect = bufferStr.startsWith(CONNECT);
+                boolean proxyConnection = bufferStr.contains(PROXY_CONNECTION);
                 //是否为http代理认证请求，当url包括“:port”或者“:port/”，port为穿透代理外网端口，则表示为http代理认证请求
-                boolean httpProxyAuthRequest = bufferStr.contains(":" + clientProxy.getRemote_port()) || url.contains(":") && (url.endsWith(":" + clientProxy.getRemote_port()) || url.contains(":" + clientProxy.getRemote_port() + "/"));
-                if (httpProxyAuthRequest) {
+                boolean httpAuthRequest = url.contains(socket.localAddress().host());
+                if (httpAuthRequest) {
                     boolean https = securityService.isHttps(buffer, clientProxy.getRemote_port());
                     if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
-                        if (securityService.authorizeHttpProxy(clientRegister, host, buffer)) {
+                        if ((proxyConnection && securityService.authorizeHttpProxy(clientRegister, host, buffer))
+                                || (!proxyConnection && (securityService.authorized(host) || securityService.authorizeHttp(clientRegister, host, buffer)))) {
                             //HTTP代理方式穿透，通过代理IP:端口认证，认证成功返回成功就行
                             log.debug("[{}]正向代理穿透认证成功！", host);
                             //如果是https，返回https成功响应
@@ -232,19 +236,24 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                         } else {
                             //认证未通过，返回认证失败
                             log.warn("[{}]未授权访问正向代理穿透:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
-                            //http代理认证
-                            if (https) {
-                                socket.end(Buffer.buffer(securityService.getHttpsProxyAuthenticateResponse(host)));
+                            if (proxyConnection) {
+                                //http代理认证
+                                if (https) {
+                                    socket.end(Buffer.buffer(securityService.getHttpsProxyAuthenticateResponse(host)));
+                                } else {
+                                    socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
+                                }
                             } else {
-                                socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
+                                //http代理认证
+                                socket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
                             }
+
                         }
                     } else {
                         //不支持http代理方式，直接关闭
                         socket.close();
                     }
                 } else {
-                    boolean proxyConnection = bufferStr.contains(PROXY_CONNECTION);
                     Pattern hostPattern = Pattern.compile("^Host:\\s*(.+)$", Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
                     Matcher matcher = hostPattern.matcher(bufferStr);
                     String targetHost;

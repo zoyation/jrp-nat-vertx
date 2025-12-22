@@ -571,7 +571,8 @@ public class SecurityService implements InitializingBean {
     public String getHttpsConnectResponse() {
         return "HTTP/1.1 200 Connection Established\r\n" +
                 "Proxy-Agent: JRP-Server\r\n" +
-                "Content-Length: 0\r\n" +
-                "\r\n";
+                "Content-Length: 2\r\n" +  // 更新Content-Length为"success"的长度
+                "\r\n" +
+                "ok";
     }
 }
