@@ -63,13 +63,13 @@ public class ProxyClientManager implements InitializingBean {
      */
     public static final int IDLE_TIMEOUT = 4;
     /**
-     * 缓冲区大小1024*1024*2 byte，默认2M
+     * 缓冲区大小256KB
      */
-    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
+    public static final int BUFFER_SIZE = 256 * 1024;
     /**
-     * 写队列最大长度100
+     * 写队列最大长度4 * 1024 * 256 * 1024=1G
      */
-    public static final int WRITE_QUEUE_MAX_SIZE = 16384;
+    public static final int WRITE_QUEUE_MAX_SIZE = 4 * 1024;
     /**
      * 消息类型和端口byte长度
      */

@@ -25,7 +25,6 @@ import org.springframework.util.StringUtils;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.StringTokenizer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -75,7 +74,6 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
     // SOCKS4 响应：成功
     private static final byte SOCKS4_REPLY_SUCCEEDED = 0x5A;
     public static final String PROXY_CONNECTION = "Proxy-Connection";
-    public static final String PROXY_AUTHORIZATION = "Proxy-Authorization";
     public static final String ALL_HOST = "0.0.0.0";
     /**
      * 创建TCP服务器用于http代理、SOCKS代理穿透
@@ -104,19 +102,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
     public void init() {
         //创建HTTP认证服务
         Integer remotePort = clientProxy.getRemote_port();
-        // 创建TCP服务器用于SOCKS5
-        NetServerOptions options = new NetServerOptions();
-//        options.setIdleTimeout(IDLE_TIMEOUT);
-        options.setTcpKeepAlive(true);
-        options.setTcpNoDelay(true);
-        options.setTcpFastOpen(true);
-        //options.setClientAuth(ClientAuth.REQUIRED);
-        options.setReceiveBufferSize(BUFFER_SIZE);
-        options.setSendBufferSize(BUFFER_SIZE);
-        if (clientProxy.getType() == ServiceType.HTTPS_PROXY) {
-            options.setSsl(true);
-            options.setKeyCertOptions(securityService.getKeyCertOptions());
-        }
+        //创建TCP服务
+        NetServerOptions options = getNetServerOptions();
         //TCP监听
         server = this.vertx.createNetServer(options);
         // 处理SOCKS5连接请求，和基于端口的反向代理转发处理方式不一样：多了握手处理、认证处理（可选），握手和认证处理完后，从SOCKS5请求数据中获取目标服务地址和端口
@@ -160,6 +147,27 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                         remotePort, res.cause().getMessage(), res.cause());
             }
         });
+    }
+
+    /**
+     * 获取NetServerOptions
+     *
+     * @return NetServerOptions
+     */
+    private NetServerOptions getNetServerOptions() {
+        NetServerOptions options = new NetServerOptions();
+//        options.setIdleTimeout(IDLE_TIMEOUT);
+        options.setTcpKeepAlive(true);
+        options.setTcpNoDelay(true);
+        options.setTcpFastOpen(true);
+        //options.setClientAuth(ClientAuth.REQUIRED);
+        options.setReceiveBufferSize(BUFFER_SIZE);
+        options.setSendBufferSize(BUFFER_SIZE);
+        if (clientProxy.getType() == ServiceType.HTTPS_PROXY) {
+            options.setSsl(true);
+            options.setKeyCertOptions(securityService.getKeyCertOptions());
+        }
+        return options;
     }
 
     @Override
@@ -208,18 +216,28 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 HttpMethod method = HttpMethod.valueOf(methodAndUrl[0]);
                 String url = methodAndUrl[1];
                 //是否为http代理认证请求，当url包括“:port”或者“:port/”，port为穿透代理外网端口，则表示为http代理认证请求
-                boolean httpProxyAuthRequest = url.contains(":") && (url.endsWith(":" + clientProxy.getRemote_port()) || url.contains(":" + clientProxy.getRemote_port() + "/"));
+                boolean httpProxyAuthRequest = bufferStr.contains(":" + clientProxy.getRemote_port()) || url.contains(":") && (url.endsWith(":" + clientProxy.getRemote_port()) || url.contains(":" + clientProxy.getRemote_port() + "/"));
                 if (httpProxyAuthRequest) {
+                    boolean https = securityService.isHttps(buffer, clientProxy.getRemote_port());
                     if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
                         if (securityService.authorizeHttpProxy(clientRegister, host, buffer)) {
                             //HTTP代理方式穿透，通过代理IP:端口认证，认证成功返回成功就行
                             log.debug("[{}]正向代理穿透认证成功！", host);
-                            socket.end(Buffer.buffer(securityService.getOKResponse()));
+                            //如果是https，返回https成功响应
+                            if (https) {
+                                socket.end(Buffer.buffer(securityService.getHttpsConnectResponse()));
+                            } else {
+                                socket.end(Buffer.buffer(securityService.getOKResponse()));
+                            }
                         } else {
                             //认证未通过，返回认证失败
                             log.warn("[{}]未授权访问正向代理穿透:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
                             //http代理认证
-                            socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
+                            if (https) {
+                                socket.end(Buffer.buffer(securityService.getHttpsProxyAuthenticateResponse(host)));
+                            } else {
+                                socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
+                            }
                         }
                     } else {
                         //不支持http代理方式，直接关闭
@@ -254,7 +272,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                     if (proxyConnection) {//HTTP代理请求
                         if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
                             if (securityService.authorizeHttpProxy(clientRegister, host, buffer)) {//通过认证的代理请求，尝试和内网建立连接转发数据
-                                Buffer httpData = removeHttpProxy(bufferStr);
+                                Buffer httpData = securityService.removeHttpProxy(bufferStr);
                                 //重新设置tcp数据接收处理器
                                 socket.handler(httDataHandler(msgId));
                                 //转发请求
@@ -393,43 +411,6 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 }
             }
         };
-    }
-
-    /**
-     * 移除请求行和请求头里的代理信息
-     *
-     * @param bufferStr 请求数据
-     * @return 移除代理信息后的数据
-     */
-    private static Buffer removeHttpProxy(String bufferStr) {
-        StringTokenizer requestLines = new StringTokenizer(bufferStr, "\r\n", true);
-        boolean connection = bufferStr.contains("\nConnection: ");
-        StringBuilder dataBuilder = new StringBuilder(); // 使用 StringBuilder 替代 StringJoiner 并修正换行符
-        while (requestLines.hasMoreTokens()) {
-            String requestLine = requestLines.nextToken();
-            if (dataBuilder.length() == 0) {
-                // 替换第一行的 URL 为相对路径
-                requestLine = requestLine.replaceFirst("(https|http)://[^/]+", "");
-            }
-            if (requestLine.startsWith(PROXY_AUTHORIZATION)) {
-                if (requestLines.hasMoreTokens()) {
-                    requestLines.nextToken();
-                }
-                continue;
-            }
-            if (requestLine.startsWith(PROXY_CONNECTION)) {
-                if (!connection) {
-                    requestLine = requestLine.replace(PROXY_CONNECTION, "Connection");
-                } else {
-                    if (requestLines.hasMoreTokens()) {
-                        requestLines.nextToken();
-                    }
-                    continue;
-                }
-            }
-            dataBuilder.append(requestLine);
-        }
-        return Buffer.buffer(dataBuilder.toString());
     }
 
     /**
@@ -591,7 +572,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
             String bufferStr = buffer.toString();
             Buffer sendBuffer;
             if (securityService.isHTTPRequest(buffer)) {
-                sendBuffer = removeHttpProxy(bufferStr);
+                sendBuffer = securityService.removeHttpProxy(bufferStr);
             } else {
                 //非首次请求数据
                 sendBuffer = buffer;

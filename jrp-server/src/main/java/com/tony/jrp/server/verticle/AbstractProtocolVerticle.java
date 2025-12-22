@@ -19,8 +19,14 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      * 读写超时时间，单位秒
      */
     public static final int IDLE_TIMEOUT = 10;
-    public static final int WRITE_QUEUE_MAX_SIZE = 16384;
-    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
+    /**
+     * 数据大小，默认256KB
+     */
+    public static final int BUFFER_SIZE = 256 * 1024;
+    /**
+     * 写队列最大长度4 * 1024 * 256 * 1024=1G
+     */
+    public static final int WRITE_QUEUE_MAX_SIZE = 4 * 1024;
     public static final int MSG_BYTE_SIZE = 6;
 
     /**
@@ -50,6 +56,7 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
         this.securityService = securityService;
         this.clientRegister = clientRegister;
         this.clientProxy = clientProxy;
+        serverSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
     }
 
     @Override

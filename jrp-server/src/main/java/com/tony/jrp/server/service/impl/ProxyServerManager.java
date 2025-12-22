@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class ProxyServerManager implements InitializingBean {
     public static final int IDLE_TIMEOUT = 4;
-    public static final int BUFFER_SIZE = 1024 * 1024 * 2;
+    public static final int BUFFER_SIZE = 256 * 1024;
     /**
      * 上线
      */
@@ -233,8 +233,8 @@ public class ProxyServerManager implements InitializingBean {
     private HttpServerOptions getHttpServerOptions() {
         HttpServerOptions serverOptions = new HttpServerOptions();
         serverOptions.setRegisterWebSocketWriteHandlers(true);
-        serverOptions.setMaxWebSocketMessageSize(BUFFER_SIZE * 2);
-        serverOptions.setMaxWebSocketFrameSize(BUFFER_SIZE * 4);
+        serverOptions.setMaxWebSocketMessageSize(BUFFER_SIZE);
+        serverOptions.setMaxWebSocketFrameSize(BUFFER_SIZE);
         serverOptions.setIdleTimeout(IDLE_TIMEOUT);
         serverOptions.setTcpKeepAlive(true);
         if (this.properties.isSsl()) {

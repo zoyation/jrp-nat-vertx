@@ -38,6 +38,10 @@ public class SecurityService implements InitializingBean {
      * 代理授权信息
      */
     public static final String PROXY_AUTHORIZATION = "Proxy-Authorization";
+    /**
+     * 代理连接信息
+     */
+    public static final String PROXY_CONNECTION = "Proxy-Connection";
     private Pattern whitePattern;
     /**
      * 已授权主机列表和授权过期时间
@@ -240,6 +244,24 @@ public class SecurityService implements InitializingBean {
     }
 
     /**
+     * 返回增强型HTTPS代理认证报文
+     *
+     * @param host 主机名称、IP
+     * @return 认证报文
+     */
+    public String getHttpsProxyAuthenticateResponse(String host) {
+        return "HTTP/1.1 407 Proxy Authentication Required\r\n" +
+                "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
+                "Pragma: no-cache\r\n" +
+                "Expires: 0\r\n" +
+                "Proxy-Authenticate: " + getWWWAuthenticate(host) + "\r\n" +
+                "Content-Type: text/html\r\n" +
+                "Connection: close\r\n" +
+                "\r\n" +
+                "<html><body><h1>407 Proxy Authentication Required</h1><p>Authentication is required for accessing this HTTPS resource through the proxy.</p></body></html>";
+    }
+
+    /**
      * 返回增强型HTTPS认证报文
      *
      * @param host 主机名称、IP
@@ -364,6 +386,7 @@ public class SecurityService implements InitializingBean {
                 "Cache-Control: no-cache, no-store, must-revalidate\r\n" +
                 "Pragma: no-cache\r\n" +
                 "Expires: 0\r\n" +
+                "Connection: close\r\n" +  // 添加连接关闭指令
                 "\r\n" +  //这个空行是来分隔请求头与请求体的
                 "<h1>OK</h1>\r\n";
     }
@@ -388,6 +411,10 @@ public class SecurityService implements InitializingBean {
         // 首先检查是否为HTTP CONNECT请求
         if (this.isHTTPRequest(data)) {
             String dataStr = data.toString();
+            //增加判断Upgrade-Insecure-Requests: 1
+            if (dataStr.contains("Upgrade-Insecure-Requests: 1")) {
+                return true;
+            }
             if (dataStr.startsWith("CONNECT ")) {
                 return true; // HTTPS CONNECT请求
             }
@@ -491,5 +518,60 @@ public class SecurityService implements InitializingBean {
         }
         log.debug("removeHead: {}", builder);
         return Buffer.buffer(builder.toString());
+    }
+
+    /**
+     * 移除请求行和请求头里的代理信息
+     *
+     * @param bufferStr 请求数据
+     * @return 移除代理信息后的数据
+     */
+    public Buffer removeHttpProxy(String bufferStr) {
+        StringTokenizer requestLines = new StringTokenizer(bufferStr, "\r\n", true);
+        boolean connection = bufferStr.contains("\nConnection: ");
+        StringBuilder dataBuilder = new StringBuilder(); // 使用 StringBuilder 替代 StringJoiner 并修正换行符
+        while (requestLines.hasMoreTokens()) {
+            String requestLine = requestLines.nextToken();
+            if (dataBuilder.length() == 0) {
+                // 替换第一行的 URL 为相对路径
+                requestLine = requestLine.replaceFirst("(https|http)://[^/]+", "");
+            }
+            if (requestLine.startsWith(PROXY_AUTHORIZATION)) {
+                if (requestLines.hasMoreTokens()) {
+                    requestLines.nextToken();
+                }
+                if (requestLines.hasMoreTokens()) {
+                    requestLines.nextToken();
+                }
+                continue;
+            }
+            if (requestLine.startsWith(PROXY_CONNECTION)) {
+                if (!connection) {
+                    requestLine = requestLine.replace(PROXY_CONNECTION, "Connection");
+                } else {
+                    if (requestLines.hasMoreTokens()) {
+                        requestLines.nextToken();
+                    }
+                    if (requestLines.hasMoreTokens()) {
+                        requestLines.nextToken();
+                    }
+                    continue;
+                }
+            }
+            dataBuilder.append(requestLine);
+        }
+        return Buffer.buffer(dataBuilder.toString());
+    }
+
+    /**
+     * 获取HTTPS请求成功响应码
+     *
+     * @return HTTPS请求成功响应码
+     */
+    public String getHttpsConnectResponse() {
+        return "HTTP/1.1 200 Connection Established\r\n" +
+                "Proxy-Agent: JRP-Server\r\n" +
+                "Content-Length: 0\r\n" +
+                "\r\n";
     }
 }
