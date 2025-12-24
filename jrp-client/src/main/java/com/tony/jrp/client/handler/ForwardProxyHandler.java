@@ -138,7 +138,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                             }
                                         });
                                         log.info("内网代理连接到{}:{}成功！", targetHost, targetPort);
-                                        if (sendData.length() > 0) {
+                                        if (sendData.length() > 0 && !isConnectRequest(sendData)) {
                                             //http、https请求，发送数据
                                             sendData(sendData, proxySocket);
                                         } else {
@@ -167,6 +167,20 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                 }
             }
         }
+    }
+
+    // 提取的辅助方法
+    private boolean isConnectRequest(Buffer buffer) {
+        if (buffer.length() < 7) {
+            return false;
+        }
+        return buffer.getByte(0) == 'C' &&
+                buffer.getByte(1) == 'O' &&
+                buffer.getByte(2) == 'N' &&
+                buffer.getByte(3) == 'N' &&
+                buffer.getByte(4) == 'E' &&
+                buffer.getByte(5) == 'C' &&
+                buffer.getByte(6) == 'T';
     }
 
     /**

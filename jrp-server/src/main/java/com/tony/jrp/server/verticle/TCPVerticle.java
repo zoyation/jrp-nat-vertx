@@ -172,7 +172,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
         server.listen(remotePort, res -> {
             // 监听端口
             if (res.succeeded()) {
-                log.info("[{}]内网穿透代理服务启动成功，代理端口：{}。", clientProxy.getType().name(), remotePort);
+                log.info("[{}]内网穿透服务启动成功，代理端口：{}。", clientProxy.getType().name(), remotePort);
             } else {
                 log.error("端口[{}]-[{}]内网穿透代理服务启动失败：{}", remotePort, clientProxy.getType().name(), res.cause().getMessage(), res.cause());
             }
