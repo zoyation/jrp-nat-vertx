@@ -199,46 +199,50 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
             //Proxy-Authorization: Digest
             //是否为HTTP请求
             boolean httpFlag = securityService.isHTTPRequest(buffer);
-            if (httpFlag) {
+            if (httpFlag && (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY)) {
                 log.debug("httpData:{}", buffer.toString());
                 String bufferStr = buffer.toString();
                 log.debug("收到[{}]客户端数据[{}]！", remoteAddress.toString(), bufferStr);
                 //处理http认证
                 String host = remoteAddress.host();
                 int remotePort = remoteAddress.port();
-                //substrate.office.com:443,http://192.168.1.13:1081/
+                //如果是安全（S）代理：直接访问页面会发送CONNECT认证消息:
+                /*
+                CONNECT 115.175.23.114:1082 HTTP/1.1
+                Host: 115.175.23.114:1082
+                Proxy-Connection: keep-alive
+                User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0
+                */
                 boolean httpsConnect = bufferStr.startsWith(CONNECT);
+                boolean getRequest = bufferStr.startsWith("GET");
                 //是否为http代理请求
                 boolean proxyConnection = bufferStr.contains(PROXY_CONNECTION);
-                //判断是否访问的代理服务，消息如果包含监听IP和端口就是代理服务
-                boolean proxyAddress = bufferStr.contains(socket.localAddress().toString());
-                if (httpsConnect && proxyAddress) {
-                    log.warn("[{}]不支持https代理认证，关闭连接！", remoteAddress);
-                    socket.close();
-                } else if (proxyAddress) {
-                    //访问http服务ip端口进行，需要进行http认证
-                    if (clientProxy.getType() == ServiceType.HTTP_PROXY || clientProxy.getType() == ServiceType.HTTPS_PROXY || clientProxy.getType() == ServiceType.SMART_PROXY) {
-                        if (securityService.authorized(host)
-                                || (proxyConnection && securityService.authorizeHttpProxy(clientRegister, host, buffer))
-                                || (!proxyConnection && securityService.authorizeHttp(clientRegister, host, buffer))) {
+                if (getRequest && !securityService.authorized(host)) {
+                    if (proxyConnection) {
+                        if (securityService.authorized(host) || securityService.authorizeHttpProxy(clientRegister, host, buffer)) {
+                            //HTTP代理方式穿透，通过代理IP:端口认证，认证成功返回成功就行
+                            log.debug("[{}]正向代理穿透认证成功！", host);
+                            //如果是https，返回https成功响应
+                            socket.end(Buffer.buffer(securityService.getOKResponse()));
+                        } else {
+                            //认证未通过，返回认证失败
+                            log.warn("[{}]未授权访问正向代理穿透:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
+                            //http代理认证
+                            socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
+                        }
+                    } else {
+                        //访问http服务ip端口进行，需要进行http认证
+                        if (securityService.authorized(host) || securityService.authorizeHttp(clientRegister, host, buffer)) {
                             //HTTP代理方式穿透，通过代理IP:端口认证，认证成功返回成功就行
                             log.debug("[{}]正向代理穿透http认证成功！", host);
                             //如果是https，返回https成功响应
                             socket.end(Buffer.buffer(securityService.getOKResponse()));
                         } else {
                             //认证未通过，返回认证失败
-                            log.warn("[{}]未授权访问正向代理穿透:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
-                            if (proxyConnection) {
-                                socket.end(Buffer.buffer(securityService.getHttpProxyAuthenticateResponse(host)));
-                            } else {
-                                //http代理认证
-                                socket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
-                            }
+                            log.warn("[{}]未授权访问正向代理http穿透:{}，浏览器弹窗输入认证信息！", remoteAddress, remotePort);
+                            //http代理认证
+                            socket.end(Buffer.buffer(securityService.getAuthenticateResponse(host)));
                         }
-                    } else {
-                        //不支持http代理方式，直接关闭
-                        log.warn("[{}]不支持http代理穿透！", remoteAddress);
-                        socket.close();
                     }
                 } else {
                     Pattern hostPattern = Pattern.compile("^Host:\\s*(.+)$", Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
