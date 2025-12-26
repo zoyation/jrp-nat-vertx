@@ -29,8 +29,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
 
     private NetServer server;
 
-    public TCPVerticle(ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
-        super(serverSocket, securityService, clientRegister, clientProxy);
+    public TCPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
+        super(ipv4, serverSocket, securityService, clientRegister, clientProxy);
     }
 
     @Override

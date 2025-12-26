@@ -28,7 +28,10 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      */
     public static final int WRITE_QUEUE_MAX_SIZE = 4 * 1024;
     public static final int MSG_BYTE_SIZE = 6;
-
+    /**
+     * 代理服务器对应的外网IPV4地址
+     */
+    protected final String ipv4;
     /**
      * 持有和内网代理服务器的连接，收到客户端请求消息后，通知内网代理服务器
      */
@@ -51,7 +54,8 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      */
     private final Map<Integer, T> clientSocketMap = new ConcurrentHashMap<>();
 
-    protected AbstractProtocolVerticle(ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
+    protected AbstractProtocolVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
+        this.ipv4 = ipv4;
         this.serverSocket = serverSocket;
         this.securityService = securityService;
         this.clientRegister = clientRegister;

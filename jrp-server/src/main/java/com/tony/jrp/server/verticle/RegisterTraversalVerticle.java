@@ -5,8 +5,11 @@ import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.server.service.impl.SecurityService;
 import io.vertx.core.AbstractVerticle;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.ServerWebSocket;
+import io.vertx.core.http.*;
+import io.vertx.core.json.JsonObject;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -71,63 +74,101 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
 
     @Override
     public void start() throws Exception {
-        serverSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
-        /* 重新设置socket的handler，处理返回消息 */
-        serverSocket.handler(data -> {
-            JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
-            //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
-            //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
-            //外网访问端口，整数，比如1024
-            Integer remotePort = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN).getUnsignedShort(0);
-            //int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
-            //clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
-            Integer requestId = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN).getInt(0);
-            //获取消息标识：代理端口+请求id
-            Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN);
-            Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
-            AbstractProtocolVerticle<?> verticle = verticleMap.get(remotePort);
-            if (verticle == null) {
-                log.warn("端口[{}]收到内网代理服务返回消息，但是未找到端口对应代理，客户端标识id[{}]对应连接已经失效，发送关闭连接消息到内网代理服务！", remotePort, requestId);
-                serverSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
+        //vertx调用第三方接口获取云服务器外网IPV4地址和IPV6地址
+        // 获取IPv4地址
+        fetchIP("http://httpbin.org/ip").onSuccess(ipv4 -> {
+// 获取IPv6地址
+            //fetchIP("https://api64.ipify.org?format=json");
+            serverSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
+            /* 重新设置socket的handler，处理返回消息 */
+            serverSocket.handler(data -> {
+                JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
+                //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
+                //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
+                //外网访问端口，整数，比如1024
+                Integer remotePort = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN).getUnsignedShort(0);
+                //int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
+                //clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
+                Integer requestId = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN).getInt(0);
+                //获取消息标识：代理端口+请求id
+                Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN);
+                Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
+                AbstractProtocolVerticle<?> verticle = verticleMap.get(remotePort);
+                if (verticle == null) {
+                    log.warn("端口[{}]收到内网代理服务返回消息，但是未找到端口对应代理，客户端标识id[{}]对应连接已经失效，发送关闭连接消息到内网代理服务！", remotePort, requestId);
+                    serverSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
+                } else {
+                    verticle.backData(msgType, msgId, requestId, realData);
+                }
+            });
+            //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端
+            for (ClientProxy clientProxy : clientRegister.getProxies()) {
+                Integer remotePort = clientProxy.getRemote_port();
+                synchronized (RegisterTraversalVerticle.this) {
+                    if (verticleMap.get(remotePort) != null) {
+                        log.warn("已存在外网端口为[{}]的代理信息，不做处理！", remotePort);
+                        continue;
+                    }
+                }
+                AbstractProtocolVerticle<?> verticle;
+                switch (clientProxy.getType()) {
+                    case HTTPS:
+                    case HTTP:
+                    case TCP: {
+                        verticle = new TCPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                        break;
+                    }
+                    case UDP: {
+                        verticle = new UDPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                        break;
+                    }
+                    case HTTP_PROXY:
+                    case HTTPS_PROXY:
+                    case SOCKS4:
+                    case SOCKS5:
+                    case SMART_PROXY:
+                        verticle = new ForwardProxyVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                        break;
+                    default:
+                        throw new IllegalStateException("不支持代理类型：" + clientProxy.getType().name() + "！");
+                }
+                vertx.deployVerticle(verticle)
+                        .onSuccess(id -> verticleMap.put(remotePort, verticle))
+                        .onFailure(Throwable::printStackTrace);
+            }
+        }).onFailure(throwable -> {
+            log.error("获取外网IPV4地址失败！", throwable);
+        });
+
+    }
+
+    /**
+     * @param url 获取ip服务器地址
+     * @return ip
+     */
+    private Future<String> fetchIP(String url) {
+        HttpClient client = vertx.createHttpClient();
+        Promise<String> promise = Promise.promise();
+        client.request(new RequestOptions().setMethod(HttpMethod.GET).setAbsoluteURI(url), result -> {
+            if (result.succeeded()) {
+                HttpClientRequest request = result.result();
+                request.send().onSuccess(response -> {
+                    if (response.statusCode() == 200) {
+                        response.bodyHandler(body -> {
+                            String ip = new JsonObject(body.toString()).getString("origin");
+                            promise.complete(ip);
+                        });
+                    } else {
+                        promise.fail("获取外网IP失败");
+                    }
+                }).onFailure(t -> {
+                    promise.fail("获取外网IP失败");
+                });
             } else {
-                verticle.backData(msgType, msgId, requestId, realData);
+                promise.fail("获取外网IP失败");
             }
         });
-        //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端
-        for (ClientProxy clientProxy : clientRegister.getProxies()) {
-            Integer remotePort = clientProxy.getRemote_port();
-            synchronized (RegisterTraversalVerticle.this) {
-                if (verticleMap.get(remotePort) != null) {
-                    log.warn("已存在外网端口为[{}]的代理信息，不做处理！", remotePort);
-                    continue;
-                }
-            }
-            AbstractProtocolVerticle<?> verticle;
-            switch (clientProxy.getType()) {
-                case HTTPS:
-                case HTTP:
-                case TCP: {
-                    verticle = new TCPVerticle(serverSocket, securityService, clientRegister, clientProxy);
-                    break;
-                }
-                case UDP: {
-                    verticle = new UDPVerticle(serverSocket, securityService, clientRegister, clientProxy);
-                    break;
-                }
-                case HTTP_PROXY:
-                case HTTPS_PROXY:
-                case SOCKS4:
-                case SOCKS5:
-                case SMART_PROXY:
-                    verticle = new ForwardProxyVerticle(serverSocket, securityService, clientRegister, clientProxy);
-                    break;
-                default:
-                    throw new Exception("不支持代理类型：" + clientProxy.getType().name() + "！");
-            }
-            vertx.deployVerticle(verticle)
-                    .onSuccess(id -> verticleMap.put(remotePort, verticle))
-                    .onFailure(Throwable::printStackTrace);
-        }
+        return promise.future();
     }
 
     @Override

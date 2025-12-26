@@ -146,13 +146,13 @@ class JrpNatTests {
         socket.listen(2001, "192.168.1.35").onSuccess(r -> {
             System.out.println("listen success");
         });
-        DatagramSocket socket1 = vertx.createDatagramSocket();
-        for (int i = 1; i < 10; i++) {
-            final String iStr = String.valueOf(i);
-            vertx.setTimer(i * 1000, timerId -> {
-                socket1.send(iStr, 2001, "192.168.1.35");
-            });
-        }
+//        DatagramSocket socket1 = vertx.createDatagramSocket();
+//        for (int i = 1; i < 10; i++) {
+//            final String iStr = String.valueOf(i);
+//            vertx.setTimer(i * 1000, timerId -> {
+//                socket1.send(iStr, 2001, "192.168.1.35");
+//            });
+//        }
         Thread.sleep(Long.MAX_VALUE);
     }
 }

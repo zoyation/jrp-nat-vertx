@@ -1,8 +1,9 @@
-# JRP内网穿透快速上手指南
+# jrp内网穿透快速上手
+jrp-nat-vertx支持“HTTP、HTTPS、TCP、UDP”端口映射穿透和“HTTP代理、HTTPS代理、STCP(sock4/SOCKS5 TCP)”正向代理穿透
 ## 一、下载解压
 1. **服务端（部署在外网服务器）：** https://gitee.com/java-tony/jrp-nat-vertx/releases/download/v1.1.0/jrp-server-1.1.0.zip
 2. **客户端（部署在内网机器，连接服务端）：** https://gitee.com/java-tony/jrp-nat-vertx/releases/download/v1.1.0/jrp-client-1.1.0.zip
-## 三、部署
+## 二、部署
 ### 服务端部署（外网服务器）
 1. **防火墙开放端口：** 10010(验证启动)、2000(注册)、8001(客户端外网配置页面)、1080(正向代理穿透端口)
 2. **安装Java：** JDK8或JRE8

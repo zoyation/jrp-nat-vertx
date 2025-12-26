@@ -43,8 +43,8 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
     private final Map<Integer, Long> requestIdTimestamps = new ConcurrentHashMap<>();
     private static final long REQUEST_TIMEOUT = 30000; // 30秒超时
 
-    public UDPVerticle(ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
-        super(serverSocket, securityService, clientRegister, clientProxy);
+    public UDPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
+        super(ipv4, serverSocket, securityService, clientRegister, clientProxy);
     }
 
     @Override
