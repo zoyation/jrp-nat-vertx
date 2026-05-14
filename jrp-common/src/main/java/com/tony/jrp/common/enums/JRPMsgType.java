@@ -12,6 +12,8 @@ import java.util.Arrays;
  * RECEIVE： 接收
  * RESPONSE： 响应
  * CLOSE： 关闭
+ * PROXIES_UPDATE： 更新代理
+ * PROXIES_UPDATE_RESULT： 更新代理结果
  */
 @Getter
 public enum JRPMsgType implements Serializable {
@@ -19,7 +21,9 @@ public enum JRPMsgType implements Serializable {
     REGISTER_RESULT((byte) 0X01),
     RECEIVE((byte) 0X02),
     RESPONSE((byte) 0X03),
-    CLOSE((byte) 0X04);
+    CLOSE((byte) 0X04),
+    PROXIES_UPDATE((byte) 0X05),
+    PROXIES_UPDATE_RESULT((byte) 0X06);
     private final byte code;
     private final byte[] codeArray;
     public static final int TYPE_LEN = 1;
