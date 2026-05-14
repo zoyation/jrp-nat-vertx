@@ -43,7 +43,7 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
     /**
      * 客户端注册信息
      */
-    protected final ClientRegister clientRegister;
+    protected ClientRegister clientRegister;
     /**
      * 内网代理服务注册信息
      */
@@ -134,4 +134,22 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      * @param data      实际数据
      */
     protected abstract void backData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer data);
+
+    /**
+     * 获取客户端代理配置
+     *
+     * @return 客户端代理配置
+     */
+    public ClientProxy getClientProxy() {
+        return clientProxy;
+    }
+
+    /**
+     * 更新客户端注册信息
+     *
+     * @param clientRegister 新的客户端注册信息
+     */
+    public void setClientRegister(ClientRegister clientRegister) {
+        this.clientRegister = clientRegister;
+    }
 }

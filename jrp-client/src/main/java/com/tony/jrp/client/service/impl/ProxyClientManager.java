@@ -261,11 +261,58 @@ public class ProxyClientManager implements InitializingBean {
         }
         reconnectionTimes.set(0);
         if (registerWebSocket != null) {
-            registerWebSocket.close().onComplete(r -> {
-                registerWebSocket = null;
-                startRegister(newConfig.getRemote_proxies());
-            });
+            // 已建立连接，直接发送更新代理注册信息消息
+            log.info("检测到已有连接，直接发送代理配置更新消息");
+            try {
+                // 构建更新消息
+                ClientRegister register = new ClientRegister();
+                register.setId(CPUUtils.getCpuId());
+                register.setToken(properties.getToken());
+                register.setUsername(properties.getUsername());
+                register.setPassword(properties.getPassword());
+
+                // 处理代理配置
+                List<ClientProxy> updatedProxies = new ArrayList<>();
+                for (ClientProxy proxy : newConfig.getRemote_proxies()) {
+                    ClientProxy updatedProxy = new ClientProxy();
+                    updatedProxy.setId(proxy.getId());
+                    updatedProxy.setName(proxy.getName());
+                    updatedProxy.setType(proxy.getType());
+                    updatedProxy.setRemote_port(proxy.getRemote_port());
+
+                    // 格式 host:port
+                    String proxyPass = proxy.getProxy_pass();
+                    if (StringUtils.hasText(proxyPass)) {
+                        updatedProxy.setProxy_pass(proxyPass);
+                        // 去掉http://、https://等前缀
+                        String lowerCasePass = proxyPass.toLowerCase().trim();
+                        boolean https = lowerCasePass.startsWith("https");
+                        updatedProxy.setHttps(https);
+                        proxyPass = lowerCasePass.replaceAll("^https?://", "");
+                        int index = proxyPass.lastIndexOf(":");
+                        if (index > 0) {
+                            updatedProxy.setHost(proxyPass.substring(0, index));
+                            updatedProxy.setPort(Integer.parseInt(proxyPass.substring(index + 1)));
+                        } else {
+                            updatedProxy.setHost(proxyPass);
+                            updatedProxy.setPort(https ? 443 : 80);
+                        }
+                    }
+                    updatedProxies.add(updatedProxy);
+                }
+                register.setProxies(updatedProxies);
+
+                // 发送更新消息
+                String updateJson = Json.encodePrettily(register);
+                log.info("发送代理配置更新消息：\n{}", updateJson);
+                registerWebSocket.write(Buffer.buffer(JRPMsgType.PROXIES_UPDATE.codeArray()).appendBuffer(Buffer.buffer(updateJson)))
+                        .onSuccess(v -> log.info("发送代理配置更新消息成功"))
+                        .onFailure(e -> log.error("发送代理配置更新消息失败：{}", e.getMessage(), e));
+            } catch (Exception e) {
+                log.error("构建或发送代理配置更新消息异常：{}", e.getMessage(), e);
+            }
         } else {
+            // 未建立连接，开始注册
             startRegister(newConfig.getRemote_proxies());
         }
     }
@@ -487,6 +534,21 @@ public class ProxyClientManager implements InitializingBean {
                                 errorMessage = e.getMessage();
                                 log.error("注册异常：{}", errorMessage, e);
                                 registerPromise.tryComplete(false);
+                            }
+                            break;
+                        }
+                        case PROXIES_UPDATE_RESULT: {
+                            try {
+                                RegisterResult registerResult = Json.decodeValue(buffer.getBuffer(1, buffer.length()), RegisterResult.class);
+                                if (registerResult.isSuccess()) {
+                                    //输出更新代理信息成功
+                                    log.info("更新代理信息成功：{}", registerResult.getMsg());
+                                } else {
+                                    log.error("更新代理信息失败：{}", registerResult.getMsg());
+                                }
+                            } catch (Throwable e) {
+                                errorMessage = e.getMessage();
+                                log.error("更新代理信息异常：{}", errorMessage, e);
                             }
                             break;
                         }
