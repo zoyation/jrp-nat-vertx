@@ -406,7 +406,6 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                             break;
                         } else if (method == SOCKS5_AUTH_METHOD_NONE) {
                             selectedMethod = SOCKS5_AUTH_METHOD_NONE;
-                            break;
                         }
                     }
                     if (selectedMethod == (byte) 0xFF) {

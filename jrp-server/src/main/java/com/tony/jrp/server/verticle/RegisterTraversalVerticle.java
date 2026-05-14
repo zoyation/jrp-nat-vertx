@@ -77,7 +77,7 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
         //vertx调用第三方接口获取云服务器外网IPV4地址和IPV6地址
         // 获取IPv4地址
         fetchIP("http://httpbin.org/ip").onSuccess(ipv4 -> {
-// 获取IPv6地址
+            // 获取IPv6地址
             //fetchIP("https://api64.ipify.org?format=json");
             serverSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
             /* 重新设置socket的handler，处理返回消息 */

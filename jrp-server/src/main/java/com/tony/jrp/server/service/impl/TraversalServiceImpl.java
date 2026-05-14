@@ -53,14 +53,11 @@ public class TraversalServiceImpl implements ITraversalService {
         List<ClientProxy> proxies = clientRegister.getProxies();
         return vertx.executeBlocking(() -> {
             //停止上次的代理
-            verticleMap.forEach((key, traversalVerticle) -> {
-                if (traversalVerticle.getClientRegister().getId().equals(clientRegister.getId())) {
-                    vertx.undeploy(traversalVerticle.deploymentID());
-                }
-            });
             verticleMap.entrySet().removeIf(entry -> {
                 boolean remove = entry.getValue().getClientRegister().getId().equals(clientRegister.getId());
-                vertx.undeploy(entry.getValue().deploymentID());
+                if (remove) {
+                    vertx.undeploy(entry.getValue().deploymentID());
+                }
                 return remove;
             });
             //进行端口检查，如果端口被占用了，提示不能使用
