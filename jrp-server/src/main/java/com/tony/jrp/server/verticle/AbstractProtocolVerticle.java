@@ -106,11 +106,6 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
         return clientSocketMap.containsKey(requestId);
     }
 
-    /**
-     * 关闭请求
-     *
-     * @param requestId 请求ID
-     */
     protected void removeCacheAndClose(Integer requestId) {
         T remove = clientSocketMap.remove(requestId);
         if (remove != null) {

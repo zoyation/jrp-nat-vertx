@@ -27,8 +27,49 @@ public class ClientApplication extends AbstractVerticle {
         new Launcher() {
             @Override
             public void beforeStartingVertx(VertxOptions options) {
-                //禁用自带dns
+                // 禁用自带DNS解析器，使用系统DNS
                 options.setAddressResolverOptions(null);
+
+                // ========== 高并发优化配置 ==========
+
+                // 1. Event Loop线程数：默认为CPU核心数*2，高并发场景可适当增加
+                int eventLoopPoolSize = Math.max(Runtime.getRuntime().availableProcessors() * 2, 8);
+                options.setEventLoopPoolSize(eventLoopPoolSize);
+                log.info("设置Event Loop线程数: {}", eventLoopPoolSize);
+
+                // 2. Worker线程池大小：处理阻塞任务，根据业务复杂度调整
+                int workerPoolSize = Math.max(Runtime.getRuntime().availableProcessors() * 4, 20);
+                options.setWorkerPoolSize(workerPoolSize);
+                log.info("设置Worker线程池大小: {}", workerPoolSize);
+
+                // 3. 内部阻塞线程池：用于executeBlocking等操作
+                int internalBlockingPoolSize = Math.max(Runtime.getRuntime().availableProcessors() * 2, 10);
+                options.setInternalBlockingPoolSize(internalBlockingPoolSize);
+                log.info("设置Internal Blocking线程池大小: {}", internalBlockingPoolSize);
+
+                // 4. 最大Event Loop执行时间警告阈值（纳秒），默认2秒
+                // 高并发场景下适当增加，避免频繁警告
+                options.setMaxEventLoopExecuteTime(5000000000L); // 5秒
+
+                // 5. 最大Worker执行时间警告阈值（纳秒），默认60秒
+                options.setMaxWorkerExecuteTime(120000000000L); // 120秒
+
+                // 6. 警告日志是否打印线程堆栈（性能考虑，生产环境可关闭）
+                options.setWarningExceptionTime(5000000000L); // 5秒后打印堆栈
+
+                // 7. 集群相关配置（如果启用集群）
+                // options.setClustered(true);
+                // options.setClusterHost("localhost");
+                // options.setClusterPort(0); // 自动选择端口
+
+                // 8. 文件系统配置
+                // options.setFileResolverCachingEnabled(true); // 启用文件缓存
+
+                // 9. HA配置（高可用）
+                // options.setHAEnabled(true);
+                // options.setHAGroup("my-ha-group");
+                // options.setQuorumSize(2);
+
                 super.beforeStartingVertx(options);
             }
         }.dispatch(list.toArray(new String[0]));

@@ -168,6 +168,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
 
     @Override
     protected void closeRequest(ProxyRequest request) {
+        // HTTP/HTTPS/SOCKS4/SOCKS5等代理协议，连接关闭时直接关闭TCP连接即可
+        // 客户端会通过TCP FIN包感知连接关闭
+        // 注意：不能在数据传输过程中发送额外的HTTP响应，这会破坏协议
         request.close();
     }
 
@@ -545,17 +548,37 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
      * @param msgId        消息ID
      * @param proxyProto   代理协议
      * @param targetHost   目标地址
-     * @param dstIP        目标IP
+     * @param dstIP        目标IP（IPv4为4字节，IPv6为16字节，域名为null）
      * @param targetPort   目标端口
      * @param data         需要转发的http或者udp数据
      */
     private void sendConnectInfo(NetSocket clientSocket, Integer requestId, Buffer msgId, ProxyProto proxyProto, String targetHost, byte[] dstIP, byte[] targetPort, Buffer data) {
         // 通知内网代理建立连接
-        Buffer target = Buffer.buffer(1 + targetHost.length() + 1 + targetPort.length)
+        // 格式：协议(1字节) + 地址类型(1字节: 0x01=IPv4, 0x03=域名, 0x04=IPv6) + 地址内容 + 分隔符(1字节) + 端口(2字节)
+        byte addrType;
+        Buffer addressBuffer;
+        
+        if (dstIP != null && dstIP.length == 4) {
+            // IPv4地址
+            addrType = SOCKS5_ADDR_TYPE_IPV4;
+            addressBuffer = Buffer.buffer(dstIP);
+        } else if (dstIP != null && dstIP.length == 16) {
+            // IPv6地址
+            addrType = SOCKS5_ADDR_TYPE_IPV6;
+            addressBuffer = Buffer.buffer(dstIP);
+        } else {
+            // 域名地址
+            addrType = SOCKS5_ADDR_TYPE_DOMAIN;
+            addressBuffer = Buffer.buffer(targetHost.getBytes());
+        }
+        
+        Buffer target = Buffer.buffer(1 + 1 + addressBuffer.length() + 1 + targetPort.length)
                 .appendByte(proxyProto.getProto())
-                .appendString(targetHost)
+                .appendByte(addrType)
+                .appendBuffer(addressBuffer)
                 .appendByte(IP_PORT_SEPARATOR)
                 .appendBytes(targetPort);
+        
         ProxyRequest proxyRequest = ProxyRequest.createTcpRequest(clientSocket, proxyProto, targetHost, dstIP, targetPort);
         this.cacheRequest(requestId, proxyRequest);
         //转发连接信息给穿透客户端
@@ -563,8 +586,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 .appendByte(JRPMsgType.RECEIVE.getCode())
                 .appendBuffer(msgId)
                 .appendBuffer(target).appendBuffer(data));
-        //1秒后没收到创建连接成功消息，关闭连接
-        vertx.setTimer(1000, id -> {
+        //5秒后没收到创建连接成功消息，关闭连接
+        vertx.setTimer(5000, id -> {
             if (!proxyRequest.isTunneled()) {
                 this.removeCacheAndClose(requestId);
             }
