@@ -17,7 +17,6 @@ import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
@@ -66,37 +65,95 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                 if (socket != null) {
                     sendData(data, socket);
                 } else {
-                    //首次创建TCP/UDP连接，格式：协议类型ProxyProto里枚举值（1字节）HOST(域名或IP):PORT（2字节）
+                    //首次创建TCP/UDP连接，格式：协议类型ProxyProto里枚举值（1字节）+ 地址类型(1字节: 0x01=IPv4, 0x03=域名, 0x04=IPv6) + 地址内容 + 分隔符(1字节) + 端口(2字节)
                     ProxyProto protocol = ProxyProto.getByProto(data.getByte(0));
-                    if(protocol==null){
+                    if (protocol == null) {
                         log.warn("代理请求数据格式错误或连接已经关闭！");
                         log.debug("关闭客户端[{}]对应的内容！", clientId);
                         webSocket.write(closeBuffer(msgId));
                         return;
                     }
-                    StringBuilder targetHostBuilder = new StringBuilder();
-                    for (int i = 1; i < data.length(); i++) {
-                        if (data.getByte(i) == IP_PORT_SEPARATOR) {
-                            break;
+
+                    // 读取地址类型
+                    byte addrType = data.getByte(1);
+                    String targetHost;
+                    int offset = 2; // 当前偏移量
+
+                    // 根据地址类型解析目标地址
+                    if (addrType == 0x01) {
+                        // IPv4地址 (4字节)
+                        if (data.length() < offset + 4) {
+                            log.warn("IPv4地址数据长度不足");
+                            webSocket.write(closeBuffer(msgId));
+                            return;
                         }
-                        targetHostBuilder.append((char) data.getByte(i));
-                    }
-                    String targetHost = targetHostBuilder.toString();
-                    if(!StringUtils.hasText(targetHost)){
-                        log.warn("不能解析目标host,关闭客户端[{}]对应的内容!",clientId);
+                        StringBuilder ipBuilder = new StringBuilder();
+                        for (int i = 0; i < 4; i++) {
+                            if (i > 0) ipBuilder.append(".");
+                            ipBuilder.append(data.getByte(offset + i) & 0xFF);
+                        }
+                        targetHost = ipBuilder.toString();
+                        offset += 4;
+                    } else if (addrType == 0x04) {
+                        // IPv6地址 (16字节)
+                        if (data.length() < offset + 16) {
+                            log.warn("IPv6地址数据长度不足");
+                            webSocket.write(closeBuffer(msgId));
+                            return;
+                        }
+                        byte[] ipv6Bytes = data.getBytes(offset, offset + 16);
+                        try {
+                            java.net.InetAddress inetAddress = java.net.InetAddress.getByAddress(ipv6Bytes);
+                            targetHost = inetAddress.getHostAddress();
+                        } catch (Exception e) {
+                            log.error("解析IPv6地址失败: {}", e.getMessage(), e);
+                            webSocket.write(closeBuffer(msgId));
+                            return;
+                        }
+                        offset += 16;
+                    } else if (addrType == 0x03) {
+                        // 域名地址
+                        // 查找分隔符位置
+                        int separatorPos = -1;
+                        for (int i = offset; i < data.length(); i++) {
+                            if (data.getByte(i) == IP_PORT_SEPARATOR) {
+                                separatorPos = i;
+                                break;
+                            }
+                        }
+                        if (separatorPos == -1) {
+                            log.warn("未找到域名分隔符");
+                            webSocket.write(closeBuffer(msgId));
+                            return;
+                        }
+                        targetHost = data.getString(offset, separatorPos);
+                        offset = separatorPos;
+                    } else {
+                        log.warn("不支持的地址类型: {}", addrType);
                         webSocket.write(closeBuffer(msgId));
                         return;
                     }
+
+                    if (!StringUtils.hasText(targetHost)) {
+                        log.warn("不能解析目标host,关闭客户端[{}]对应的内容!", clientId);
+                        webSocket.write(closeBuffer(msgId));
+                        return;
+                    }
+
+                    // 跳过分隔符，读取端口
+                    offset++; // 跳过IP_PORT_SEPARATOR
                     int targetPort;
                     try {
-                        targetPort = data.getBuffer(1 + targetHost.length() + 1, 1 + targetHost.length() + 1 + 2).getUnsignedShort(0);
+                        targetPort = data.getBuffer(offset, offset + 2).getUnsignedShort(0);
                     } catch (Exception e) {
-                        log.warn("不能解析目标端口,关闭客户端[{}]对应的内容!",clientId);
+                        log.warn("不能解析目标端口,关闭客户端[{}]对应的内容!", clientId);
                         webSocket.write(closeBuffer(msgId));
                         return;
                     }
-                    Buffer sendData = (protocol == ProxyProto.HTTP || protocol == ProxyProto.HTTPS) ? data.getBuffer(1 + targetHost.length() + 1 + 2, data.length()) : Buffer.buffer();
-                    log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, targetHost, targetPort);
+
+                    // 计算HTTP/HTTPS数据的起始位置
+                    Buffer sendData = (protocol == ProxyProto.HTTP || protocol == ProxyProto.HTTPS) ? data.getBuffer(offset + 2, data.length()) : Buffer.buffer();
+                    log.info("收到连接请求[{}]，准备连接到[{}:{}]！地址类型:{}", clientId, targetHost, targetPort, addrType);
                     CountDownLatch downLatch = new CountDownLatch(1);
                     if (protocol == ProxyProto.SOCK5_UDP) {
                         // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
@@ -133,15 +190,35 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         clientOptions.setTrustAll(true);
                         clientOptions.setConnectTimeout(CONNECT_TIMEOUT);
                         clientOptions.setTcpKeepAlive(true);
+                        // 设置空闲超时，避免连接长时间无数据被防火墙关闭
+                        clientOptions.setIdleTimeout(IDLE_TIMEOUT);
+                        clientOptions.setIdleTimeoutUnit(java.util.concurrent.TimeUnit.SECONDS);
                         NetClient netClient = vertx.createNetClient(clientOptions);
                         netClient.connect(targetPort, targetHost, asyncResult -> {
                             try {
                                 if (asyncResult.succeeded()) {
                                     NetSocket proxySocket = asyncResult.result();
                                     proxySocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
-                                    log.debug("cache clientId:{}",clientId);
+                                    log.debug("cache clientId:{}", clientId);
                                     socketMap.put(clientId, proxySocket);
-                                    proxySocket.exceptionHandler(e -> log.error("代理转发服务异常：{}", e.getMessage(), e));
+                                    proxySocket.exceptionHandler(e -> {
+                                        String errorMsg = e.getMessage();
+                                        // 区分不同类型的异常
+                                        if (errorMsg != null && errorMsg.contains("reset")) {
+                                            log.warn("代理连接[clientId={}]被对端重置：{}，目标服务[{}:{}]",
+                                                    clientId, errorMsg, targetHost, targetPort);
+                                        } else if (errorMsg != null && errorMsg.contains("timed out")) {
+                                            log.warn("代理连接[clientId={}]超时：{}，目标服务[{}:{}]",
+                                                    clientId, errorMsg, targetHost, targetPort);
+                                        } else {
+                                            log.error("代理转发服务异常[clientId={}]：{}，目标服务[{}:{}]",
+                                                    clientId, errorMsg, targetHost, targetPort, e);
+                                        }
+                                        // 清理资源并通知服务端
+                                        if (socketMap.remove(clientId) != null && webSocket != null) {
+                                            webSocket.write(closeBuffer(msgId));
+                                        }
+                                    });
                                     proxySocket.closeHandler(ch -> {
                                         if (webSocket != null && socketMap.remove(clientId) != null) {
                                             log.debug("客户端[{}]对应的内容请求关闭！", clientId);
@@ -161,11 +238,11 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                         log.info("内网代理连接到{}:{}成功！", targetHost, targetPort);
                                         if (sendData.length() > 0 && !isConnectRequest(sendData)) {
                                             //http、https请求，发送数据
-                                            log.debug("http、https请求[{}:{}]，发送数据" ,targetHost, targetPort);
+                                            log.debug("http、https请求[{}:{}]，发送数据", targetHost, targetPort);
                                             sendData(sendData, proxySocket);
                                         } else {
                                             //非http请求，返回给代理服务端代表连接成功
-                                            log.debug("非http请求[{}:{}]，返回给代理服务端代表连接成功" ,targetHost, targetPort);
+                                            log.debug("非http请求[{}:{}]，返回给代理服务端代表连接成功", targetHost, targetPort);
                                             webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
                                         }
                                     }
@@ -224,17 +301,59 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
         } else {
             //udp数据
             DatagramSocket socket = (DatagramSocket) stream;
-            //后续发送UDP数据，格式：协议类型ProxyProto里枚举值（1字节）HOST(域名或IP):PORT（2字节）
-            StringBuilder targetHostBuilder = new StringBuilder();
-            for (int i = 1; i < data.length(); i++) {
-                if (data.getByte(i) == IP_PORT_SEPARATOR) {
-                    break;
+            //后续发送UDP数据，格式：协议类型ProxyProto里枚举值（1字节）+ 地址类型(1字节) + 地址内容 + 分隔符(1字节) + 端口(2字节) + 实际数据
+            byte addrType = data.getByte(1);
+            int offset = 2;
+            String targetHost;
+
+            // 根据地址类型解析目标地址
+            if (addrType == 0x01) {
+                // IPv4地址 (4字节)
+                StringBuilder ipBuilder = new StringBuilder();
+                for (int i = 0; i < 4; i++) {
+                    if (i > 0) ipBuilder.append(".");
+                    ipBuilder.append(data.getByte(offset + i) & 0xFF);
                 }
-                targetHostBuilder.append((char) data.getByte(i));
+                targetHost = ipBuilder.toString();
+                offset += 4;
+            } else if (addrType == 0x04) {
+                // IPv6地址 (16字节)
+                byte[] ipv6Bytes = data.getBytes(offset, offset + 16);
+                try {
+                    java.net.InetAddress inetAddress = java.net.InetAddress.getByAddress(ipv6Bytes);
+                    targetHost = inetAddress.getHostAddress();
+                } catch (Exception e) {
+                    log.error("解析UDP IPv6地址失败: {}", e.getMessage(), e);
+                    return;
+                }
+                offset += 16;
+            } else if (addrType == 0x03) {
+                // 域名地址，查找分隔符
+                int separatorPos = -1;
+                for (int i = offset; i < data.length(); i++) {
+                    if (data.getByte(i) == IP_PORT_SEPARATOR) {
+                        separatorPos = i;
+                        break;
+                    }
+                }
+                if (separatorPos == -1) {
+                    log.error("UDP数据中未找到域名分隔符");
+                    return;
+                }
+                targetHost = data.getString(offset, separatorPos);
+                offset = separatorPos;
+            } else {
+                log.error("UDP数据中不支持的地址类型: {}", addrType);
+                return;
             }
-            String targetHost = targetHostBuilder.toString();
-            int targetPort = data.getBuffer(1 + targetHost.length() + 1, 1 + targetHost.length() + 1 + 2).getUnsignedShort(0);
-            socket.send(data.getBuffer(1 + targetHost.length() + 1 + 2, data.length()), targetPort, targetHost);
+
+            // 跳过分隔符，读取端口
+            offset++;
+            int targetPort = data.getBuffer(offset, offset + 2).getUnsignedShort(0);
+            offset += 2;
+
+            // 发送实际数据
+            socket.send(data.getBuffer(offset, data.length()), targetPort, targetHost);
         }
     }
 

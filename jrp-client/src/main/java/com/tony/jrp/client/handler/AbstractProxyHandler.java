@@ -16,7 +16,20 @@ import java.io.Closeable;
 public abstract class AbstractProxyHandler implements Closeable {
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
     public static final int WRITE_QUEUE_MAX_SIZE = 100;
-    public static final int CONNECT_TIMEOUT = 1000;
+    /**
+     * 连接超时时间：5秒
+     * NAT穿透场景需要更长的超时时间，考虑：
+     * 1. 多层NAT转发延迟
+     * 2. 跨网络环境（移动网络、跨国等）
+     * 3. 内网服务响应慢的情况
+     */
+    public static final int CONNECT_TIMEOUT = 5000;
+    /**
+     * TCP空闲超时：300秒（5分钟）
+     * 适用于HTTP Keep-Alive、HTTPS隧道、SOCKS代理等长连接场景
+     * 避免频繁重建连接，提高性能
+     */
+    public static final int IDLE_TIMEOUT = 300;
     public static final int TYPE_AND_MSG_ID_BYTE_SIZE = 9;
     protected Vertx vertx;
 
