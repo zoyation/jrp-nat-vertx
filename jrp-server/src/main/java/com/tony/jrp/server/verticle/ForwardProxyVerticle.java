@@ -563,8 +563,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 .appendByte(JRPMsgType.RECEIVE.getCode())
                 .appendBuffer(msgId)
                 .appendBuffer(target).appendBuffer(data));
-        //1秒后没收到创建连接成功消息，关闭连接
-        vertx.setTimer(1000, id -> {
+        //5秒后没收到创建连接成功消息，关闭连接
+        vertx.setTimer(5000, id -> {
             if (!proxyRequest.isTunneled()) {
                 this.removeCacheAndClose(requestId);
             }

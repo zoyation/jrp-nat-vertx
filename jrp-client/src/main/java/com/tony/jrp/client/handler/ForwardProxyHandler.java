@@ -74,7 +74,13 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         targetHostBuilder.append((char) data.getByte(i));
                     }
                     String targetHost = targetHostBuilder.toString();
-                    int targetPort = data.getBuffer(1 + targetHost.length() + 1, 1 + targetHost.length() + 1 + 2).getUnsignedShort(0);
+                    int targetPort;
+                    try {
+                        targetPort = data.getBuffer(1 + targetHost.length() + 1, 1 + targetHost.length() + 1 + 2).getUnsignedShort(0);
+                    } catch (Exception e) {
+                        log.error("解析代理请求数据异常：{}", e.getMessage(), e);
+                        throw new RuntimeException(e);
+                    }
                     Buffer sendData = (protocol == ProxyProto.HTTP || protocol == ProxyProto.HTTPS) ? data.getBuffer(1 + targetHost.length() + 1 + 2, data.length()) : Buffer.buffer();
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, targetHost, targetPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
@@ -119,6 +125,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                 if (asyncResult.succeeded()) {
                                     NetSocket proxySocket = asyncResult.result();
                                     proxySocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
+                                    log.debug("cache clientId:{}",clientId);
                                     socketMap.put(clientId, proxySocket);
                                     proxySocket.exceptionHandler(e -> log.error("代理转发服务异常：{}", e.getMessage(), e));
                                     proxySocket.closeHandler(ch -> {
@@ -140,9 +147,11 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                         log.info("内网代理连接到{}:{}成功！", targetHost, targetPort);
                                         if (sendData.length() > 0 && !isConnectRequest(sendData)) {
                                             //http、https请求，发送数据
+                                            log.debug("http、https请求[{}:{}]，发送数据" ,targetHost, targetPort);
                                             sendData(sendData, proxySocket);
                                         } else {
                                             //非http请求，返回给代理服务端代表连接成功
+                                            log.debug("非http请求[{}:{}]，返回给代理服务端代表连接成功" ,targetHost, targetPort);
                                             webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
                                         }
                                     }
