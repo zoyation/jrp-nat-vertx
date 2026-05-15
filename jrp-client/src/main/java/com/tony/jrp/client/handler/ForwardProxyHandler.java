@@ -31,9 +31,55 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
      * 代理请求对象缓存
      */
     private final Map<Integer, ReadStream<?>> socketMap = new ConcurrentHashMap<>();
+    
+    /**
+     * 复用的TCP客户端实例（线程安全，可并发使用）
+     */
+    private volatile NetClient tcpClient;
+    
+    /**
+     * TCP客户端初始化锁
+     */
+    private final Object tcpClientLock = new Object();
 
     public ForwardProxyHandler(Vertx vertx) {
         super(vertx);
+    }
+    
+    /**
+     * 获取或创建复用的TCP客户端
+     * 使用双重检查锁定确保线程安全
+     * 
+     * @return NetClient实例
+     */
+    private NetClient getOrCreateTcpClient() {
+        if (tcpClient == null) {
+            synchronized (tcpClientLock) {
+                if (tcpClient == null) {
+                    log.info("初始化复用TCP客户端...");
+                    NetClientOptions clientOptions = new NetClientOptions();
+                    clientOptions.setReceiveBufferSize(BUFFER_SIZE);
+                    clientOptions.setSendBufferSize(BUFFER_SIZE);
+                    clientOptions.setTrustAll(true);
+                    clientOptions.setConnectTimeout(CONNECT_TIMEOUT);
+                    clientOptions.setTcpKeepAlive(true);
+                    // 设置空闲超时，避免连接长时间无数据被防火墙关闭
+                    clientOptions.setIdleTimeout(IDLE_TIMEOUT);
+                    clientOptions.setIdleTimeoutUnit(java.util.concurrent.TimeUnit.SECONDS);
+                    // 允许重用地址，避免端口耗尽问题
+                    clientOptions.setReuseAddress(true);
+                    clientOptions.setReusePort(true);
+                    // 禁用Nagle算法，减少延迟
+                    clientOptions.setTcpNoDelay(true);
+                    // 快速打开TCP连接（如果系统支持）
+                    clientOptions.setTcpFastOpen(true);
+                    
+                    tcpClient = vertx.createNetClient(clientOptions);
+                    log.info("复用TCP客户端初始化完成");
+                }
+            }
+        }
+        return tcpClient;
     }
 
     @Override
@@ -183,17 +229,8 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                             downLatch.countDown();
                         });
                     } else {
-                        // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
-                        NetClientOptions clientOptions = new NetClientOptions();
-                        clientOptions.setReceiveBufferSize(BUFFER_SIZE);
-                        clientOptions.setSendBufferSize(BUFFER_SIZE);
-                        clientOptions.setTrustAll(true);
-                        clientOptions.setConnectTimeout(CONNECT_TIMEOUT);
-                        clientOptions.setTcpKeepAlive(true);
-                        // 设置空闲超时，避免连接长时间无数据被防火墙关闭
-                        clientOptions.setIdleTimeout(IDLE_TIMEOUT);
-                        clientOptions.setIdleTimeoutUnit(java.util.concurrent.TimeUnit.SECONDS);
-                        NetClient netClient = vertx.createNetClient(clientOptions);
+                        // 使用复用的TCP客户端进行连接
+                        NetClient netClient = getOrCreateTcpClient();
                         netClient.connect(targetPort, targetHost, asyncResult -> {
                             try {
                                 if (asyncResult.succeeded()) {
@@ -247,7 +284,25 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                         }
                                     }
                                 } else {
-                                    log.error("内网代理连接到{}:{}失败：{}！", targetHost, targetPort, asyncResult.cause().getMessage(), asyncResult.cause());
+                                    Throwable cause = asyncResult.cause();
+                                    String errorMsg = cause.getMessage();
+                                    
+                                    // 详细记录连接失败原因
+                                    if (errorMsg != null && errorMsg.contains("Cannot assign requested address")) {
+                                        log.error("内网代理连接失败[clientId={}]：无法分配请求的地址，目标服务[{}:{}]，地址类型:{}，可能原因：1)IPv6地址格式错误或系统不支持 2)本地端口耗尽 3)目标地址不可达", 
+                                                clientId, targetHost, targetPort, addrType, cause);
+                                    } else if (errorMsg != null && errorMsg.contains("Connection refused")) {
+                                        log.warn("内网代理连接被拒绝[clientId={}]：目标服务[{}:{}]未启动或拒绝连接", 
+                                                clientId, targetHost, targetPort);
+                                    } else if (errorMsg != null && errorMsg.contains("timed out")) {
+                                        log.warn("内网代理连接超时[clientId={}]：目标服务[{}:{}]响应超时", 
+                                                clientId, targetHost, targetPort);
+                                    } else if (errorMsg != null && errorMsg.contains("No route to host")) {
+                                        log.error("内网代理连接失败[clientId={}]：无路由到主机，目标服务[{}:{}]，网络不可达", 
+                                                clientId, targetHost, targetPort);
+                                    } else {
+                                        log.error("内网代理连接到{}:{}失败：{}！", targetHost, targetPort, errorMsg, cause);
+                                    }
                                     webSocket.write(closeBuffer(msgId));
                                 }
                             } catch (Exception e) {
@@ -359,15 +414,28 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
 
     @Override
     public void close() throws IOException {
+        // 关闭复用的TCP客户端
+        if (tcpClient != null) {
+            log.info("关闭复用TCP客户端...");
+            tcpClient.close();
+            tcpClient = null;
+            log.info("复用TCP客户端已关闭");
+        }
+        
+        // 关闭所有代理连接
         if (!socketMap.isEmpty()) {
-            log.info("停止代理转发服务");
+            log.info("停止代理转发服务，清理{}个连接", socketMap.size());
             socketMap.forEach((key, socket) -> {
-                if (socket instanceof NetSocket) {
-                    ((NetSocket) socket).close();
-                    log.debug("关闭SOCKS TCP连接[{}]！", key);
-                } else if (socket instanceof DatagramSocket) {
-                    ((DatagramSocket) socket).close();
-                    log.debug("关闭SOCKS UDP连接[{}]！", key);
+                try {
+                    if (socket instanceof NetSocket) {
+                        ((NetSocket) socket).close();
+                        log.debug("关闭TCP代理连接[{}]！", key);
+                    } else if (socket instanceof DatagramSocket) {
+                        ((DatagramSocket) socket).close();
+                        log.debug("关闭UDP代理连接[{}]！", key);
+                    }
+                } catch (Exception e) {
+                    log.warn("关闭连接[{}]时发生异常: {}", key, e.getMessage());
                 }
             });
             socketMap.clear();
