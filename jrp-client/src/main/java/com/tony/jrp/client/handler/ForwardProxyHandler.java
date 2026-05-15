@@ -13,9 +13,11 @@ import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetSocket;
 import io.vertx.core.streams.ReadStream;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.StringUtils;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 
@@ -66,6 +68,12 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                 } else {
                     //首次创建TCP/UDP连接，格式：协议类型ProxyProto里枚举值（1字节）HOST(域名或IP):PORT（2字节）
                     ProxyProto protocol = ProxyProto.getByProto(data.getByte(0));
+                    if(protocol==null){
+                        log.warn("代理请求数据格式错误或连接已经关闭！");
+                        log.debug("关闭客户端[{}]对应的内容！", clientId);
+                        webSocket.write(closeBuffer(msgId));
+                        return;
+                    }
                     StringBuilder targetHostBuilder = new StringBuilder();
                     for (int i = 1; i < data.length(); i++) {
                         if (data.getByte(i) == IP_PORT_SEPARATOR) {
@@ -74,12 +82,18 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         targetHostBuilder.append((char) data.getByte(i));
                     }
                     String targetHost = targetHostBuilder.toString();
+                    if(!StringUtils.hasText(targetHost)){
+                        log.warn("不能解析目标host,关闭客户端[{}]对应的内容!",clientId);
+                        webSocket.write(closeBuffer(msgId));
+                        return;
+                    }
                     int targetPort;
                     try {
                         targetPort = data.getBuffer(1 + targetHost.length() + 1, 1 + targetHost.length() + 1 + 2).getUnsignedShort(0);
                     } catch (Exception e) {
-                        log.error("解析代理请求数据异常：{}", e.getMessage(), e);
-                        throw new RuntimeException(e);
+                        log.warn("不能解析目标端口,关闭客户端[{}]对应的内容!",clientId);
+                        webSocket.write(closeBuffer(msgId));
+                        return;
                     }
                     Buffer sendData = (protocol == ProxyProto.HTTP || protocol == ProxyProto.HTTPS) ? data.getBuffer(1 + targetHost.length() + 1 + 2, data.length()) : Buffer.buffer();
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, targetHost, targetPort);
