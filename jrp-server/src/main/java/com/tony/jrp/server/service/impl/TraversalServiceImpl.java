@@ -56,7 +56,11 @@ public class TraversalServiceImpl implements ITraversalService {
             verticleMap.entrySet().removeIf(entry -> {
                 boolean remove = entry.getValue().getClientRegister().getId().equals(clientRegister.getId());
                 if (remove) {
-                    vertx.undeploy(entry.getValue().deploymentID());
+                    try {
+                        vertx.undeploy(entry.getValue().deploymentID());
+                    } catch (Exception e) {
+                        log.error("取消代理异常：{}", e.getMessage(), e);
+                    }
                 }
                 return remove;
             });

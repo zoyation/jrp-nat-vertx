@@ -355,7 +355,14 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
     public void stop() {
         String ports = verticleMap.keySet().stream().map(Object::toString).collect(Collectors.joining(","));
         log.info("清理端口[{}]下所有代理缓存！", ports);
-        verticleMap.values().forEach((v) -> vertx.undeploy(v.deploymentID()));
+        //vertx会自动销毁当前的verticle里创建的verticle
+//        verticleMap.values().forEach((v) ->
+//                vertx.undeploy(v.deploymentID())
+//                        .onSuccess(success -> log.info("移除端口[{}]的代理verticle成功", v.getClientProxy().getRemote_port()))
+//                        .onFailure(t ->
+//                                log.error("移除端口[{}]的代理verticle失败", v.getClientProxy().getRemote_port(), t)
+//                        )
+//        );
         verticleMap.clear();
     }
 }
