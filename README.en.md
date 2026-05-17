@@ -1,4 +1,4 @@
-# jrp-nat(Java Reverse Proxy Network Address Translation)
+# jrp-nat(Java Remote Proxy Network Address Translation)
 
 ## introductions
 

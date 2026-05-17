@@ -1,12 +1,13 @@
 <template>
-    <div>
+    <div class="page-container">
         <div v-if="isLoading" class="loading-indicator">
             Loading configuration...
         </div>
         <div v-else-if="error" class="error-message">
             {{ error }}
         </div>
-        <div v-else>
+        <div v-else class="main-content">
+            <!-- 配置表单区域 -->
             <el-card class="proxy-config-form">
                 <!-- 为表单添加 ref 和 rules -->
                 <el-form
@@ -15,19 +16,46 @@
                         :rules="rules"
                         label-width="0px"
                 >
-                    <!-- Remote Proxies -->
-                    <el-card class="proxies-section">
-                        <h2>内网穿透客户端-穿透配置</h2>
-                        <div>内网穿透状态：<span v-if="configData.success&&!changeFlag"
-                                                :style="configData.success?'color:green':'color:red'">{{configData.message}}</span>
-                            <el-button type="primary" @click="updateStatus" size="small" v-if="!changeFlag">刷新状态
-                            </el-button>
+                    <!-- 标题和简介 -->
+                        <div class="header-in-card">
+                            <h2 class="card-main-title">JRP内网穿透客户端</h2>
+                            <div class="card-intro">
+                                <span class="intro-label">工具简介：</span>
+                                <span class="intro-text">
+                                    JRP（Java Remote Proxy）是java-tony（公众号）使用Java开发的高性能内网穿透工具，包括服务端和客户端，
+                                    支持多种协议转发，包括HTTP、HTTPS、TCP、UDP以及SOCKS代理等。
+                                    通过JRP，您可以轻松安全将内网服务暴露到公网，实现远程访问、调试和部署。
+                                </span>
+                            </div>
                         </div>
+                        
+                        <div class="config-header">
+                            <h3 class="config-title">⚙️ 穿透配置</h3>
+                            <div class="header-buttons">
+                                <div class="status-info">
+                                    <span class="status-label">内网穿透状态：</span>
+                                    <span v-if="configData.success&&!changeFlag"
+                                          :class="configData.success ? 'status-success' : 'status-error'">
+                                        {{configData.message}}
+                                    </span>
+                                </div>
+                                <el-button type="primary" @click="updateStatus" :disabled="changeFlag" class="action-btn">
+                                    🔄 刷新状态
+                                </el-button>
+                                <el-button type="primary" @click="addProxy" class="action-btn">➕ 添加配置</el-button>
+                                <el-button type="warning" @click="resetConfig" class="action-btn">🔄 还原配置</el-button>
+                                <el-button type="success" @click="saveConfig" class="action-btn">💾 保存并启用穿透</el-button>
+                            </div>
+                        </div>
+                        
                         <el-table
+                                ref="proxyTableRef"
                                 :data="configData.remote_proxies"
                                 style="width: 100%"
                                 class="proxy-table"
                         >
+                            <el-table-column type="index" label="序号" width="60" align="center">
+                            </el-table-column>
                             <el-table-column prop="name" label="服务名称">
                                 <template #default="{ row, $index }">
                                     <el-form-item
@@ -39,29 +67,11 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="proxy_pass" label="本地服务地址">
-                                <template #default="{ row, $index }">
-                                    <el-form-item
-                                            :prop="`remote_proxies[${$index}].proxy_pass`"
-                                            :rules="rules.proxy_pass"
-
-                                    >
-                                         <el-input
-                                                        v-model="row.proxy_pass"
-                                                        size="large"
-                                                        class="table-input"
-                                                        :disabled="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type)"
-                                                        :placeholder="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type) ? '代理类型无需填写' : '请输入服务地址'"
-                                                    />
-                                    </el-form-item>
-                                </template>
-                            </el-table-column>
-                            <el-table-column prop="type" label="穿透类型">
+                            <el-table-column prop="type" label="穿透类型" width="180">
                                 <template #default="{ row, $index }">
                                     <el-form-item
                                             :prop="`remote_proxies[${$index}].type`"
                                             :rules="rules.type"
-
                                     >
                                         <el-select v-model="row.type" size="large" class="table-select">
                                               <el-option label="HTTP端口映射" value="HTTP" title="将HTTP请求转发到指定端口"/>
@@ -77,7 +87,24 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="remote_port" label="穿透端口（服务端）">
+                            <el-table-column prop="proxy_pass" label="本地服务地址">
+                                <template #default="{ row, $index }">
+                                    <el-form-item
+                                            :prop="`remote_proxies[${$index}].proxy_pass`"
+                                            :rules="rules.proxy_pass"
+
+                                    >
+                                         <el-input
+                                                        v-model="row.proxy_pass"
+                                                        size="large"
+                                                        class="table-input"
+                                                        :disabled="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type)"
+                                                        :placeholder="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type) ? '该代理类型无需填写' : '请输入服务地址'"
+                                                    />
+                                    </el-form-item>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="remote_port" label="穿透端口（服务端）" width="200">
                                 <template #default="{ row, $index }">
                                     <el-form-item :prop="`remote_proxies[${$index}].remote_port`" :rules="rules.remote_port">
                                         <el-input v-model.number="row.remote_port" type="number" :min="0" size="large" class="table-input"/>
@@ -111,20 +138,50 @@
                                 </template>
                             </el-table-column>
                         </el-table>
-                        <div style="margin-top: 20px; text-align: right">
-                            <el-button type="primary" @click="addProxy">添加配置</el-button>
-                            <el-button type="primary" @click="resetConfig">还原配置</el-button>
-                            <el-button type="primary" @click="saveConfig">保存并启用穿透</el-button>
+                        
+                        <!-- 穿透类型说明 - 放在最下方 -->
+                        <div class="proxy-type-section">
+                            <h3 class="section-title">📖 穿透类型说明</h3>
+                            <div class="proxy-type-description">
+                                <el-descriptions :column="3" border size="small">
+                                    <el-descriptions-item label="HTTP端口映射">
+                                        将HTTP请求转发到指定端口，适用于Web应用
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="HTTPS端口映射">
+                                        将HTTPS请求转发到指定端口，适用于加密Web应用
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="TCP端口映射">
+                                        将TCP流量转发到指定端口，适用于数据库、SSH等
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="UDP端口映射">
+                                        将UDP流量转发到指定端口，适用于DNS、视频流等
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="HTTP代理">
+                                        使用HTTP协议进行代理转发，无需填写本地地址
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="HTTPS代理">
+                                        使用HTTPS协议进行代理转发，无需填写本地地址
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="SOCKS4代理">
+                                        使用SOCKS4协议进行代理转发，无需填写本地地址
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="SOCKS5代理">
+                                        使用SOCKS5协议进行代理转发，无需填写本地地址
+                                    </el-descriptions-item>
+                                    <el-descriptions-item label="智能代理" :span="3">
+                                        同时支持HTTP代理、HTTPS代理、SOCKS4和SOCKS5代理进行正向代理穿透，无需填写本地地址
+                                    </el-descriptions-item>
+                                </el-descriptions>
+                            </div>
                         </div>
-                    </el-card>
-                </el-form>
+                    </el-form>
             </el-card>
         </div>
     </div>
 </template>
 
 <script setup>
-    import {ref, reactive, onMounted} from 'vue';
+    import {ref, reactive, onMounted, nextTick} from 'vue';
     import { ElMessage, ElMessageBox } from 'element-plus'
     import apiService from '@/services/api';
 
@@ -132,6 +189,7 @@
 
     // 添加表单引用
     const proxyConfigFormRef = ref();
+    const proxyTableRef = ref();
 
     onMounted(() => {
       fetchConfig();
@@ -269,6 +327,37 @@
         remote_port: null,
         proxy_pass: ''
       });
+      
+      // 使用 nextTick 等待 DOM 更新后滚动到底部
+      nextTick(() => {
+        setTimeout(() => {
+          if (proxyTableRef.value) {
+            // 尝试多种可能的滚动容器选择器
+            const selectors = [
+              '.el-table__body-wrapper',
+              '.el-scrollbar__wrap',
+              '.el-table .el-table__body-wrapper'
+            ];
+            
+            let scrollContainer = null;
+            for (const selector of selectors) {
+              scrollContainer = proxyTableRef.value.$el.querySelector(selector);
+              if (scrollContainer && scrollContainer.scrollHeight > scrollContainer.clientHeight) {
+                break;
+              }
+            }
+            
+            if (scrollContainer) {
+              // 强制滚动到底部
+              scrollContainer.scrollTop = scrollContainer.scrollHeight;
+              // 再次确认滚动位置
+              requestAnimationFrame(() => {
+                scrollContainer.scrollTop = scrollContainer.scrollHeight;
+              });
+            }
+          }
+        }, 100);
+      });
     }
 
     function removeProxy(index) {
@@ -327,47 +416,143 @@
 </script>
 
 <style scoped>
-    :deep(.el-table__header th) {
-        font-size: 16px; /* 可根据需要调整大小 */
+    /* 页面容器 - 全屏布局 */
+    .page-container {
+        width: 100vw;
+        min-height: 100vh;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        box-sizing: border-box;
+    }
+
+    .main-content {
+       width: 100%;
+    }
+
+    /* 配置表单样式 */
+    .proxy-config-form {
+        width: calc(100vw - 60px);
+        background: rgba(255, 255, 255, 0.98);
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    }
+
+    /* 卡片内标题和简介样式 */
+    .header-in-card {
+        padding-bottom: 10px;
+        border-bottom: 2px solid #ebeef5;
+    }
+
+    .card-main-title {
+        font-size: 24px;
+        font-weight: bold;
+        color: #2c3e50;
+        margin: 0 0 12px 0;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .card-intro {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px;
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        border-radius: 6px;
+        border-left: 3px solid #667eea;
+    }
+
+    .card-intro .intro-label {
+        font-weight: bold;
+        color: #2c3e50;
+        font-size: 14px;
+        white-space: nowrap;
+    }
+
+    .card-intro .intro-text {
+        color: #34495e;
+        line-height: 1.6;
+        font-size: 13px;
+    }
+
+    /* 配置标题样式 */
+    .config-header {
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .config-title {
+        font-size: 18px;
+        font-weight: bold;
+        color: #2c3e50;
+        margin: 0;
+        padding: 10px 0;
+        border-bottom: 2px solid #667eea;
+    }
+
+    .header-buttons {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+    }
+
+    .status-info {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 16px;
+        background: #f8f9fa;
+        border-radius: 6px;
+        margin-right: 8px;
+    }
+
+    /* 状态样式 */
+    .status-label {
+        font-weight: bold;
+        color: #2c3e50;
+    }
+
+    .status-success {
+        color: #67c23a;
         font-weight: bold;
     }
-    .proxy-config-form {
-      max-width: max(calc(100vw - 1000px),1200px);
-      margin: 20px auto;
-      overflow: hidden;
+
+    .status-error {
+        color: #f56c6c;
+        font-weight: bold;
     }
 
-    .proxies-section {
-      position: relative;
+    .refresh-btn {
+        margin-left: auto;
     }
 
+    /* 表格样式 */
     .proxy-table {
-      min-height: 300px;
-      max-height: min(calc(100vw - 30px),70vh);
-      overflow-y: auto;
+        height: calc(100vh - 410px);
+        overflow-y: auto;
     }
 
-    .proxies-section .el-card__body {
-      padding-bottom: 30px;
+    :deep(.el-table__header th) {
+        font-size: 15px;
+        font-weight: bold;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
     }
 
-    .proxies-section > div[style*="margin-top"] {
-      position: absolute;
-      bottom: 10px;
-      right: 10px;
-      margin-top: 0 !important;
+    .action-btn {
+        min-width: 140px;
+        font-weight: bold;
+        transition: all 0.3s ease;
     }
 
-    .proxy-group {
-      margin-bottom: 20px;
-    }
-
-    .remove-btn {
-      margin-top: 10px;
-    }
-
-    .add-btn {
-      margin-top: 10px;
+    .action-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
 
     /* 调整表单元素样式 */
@@ -391,5 +576,51 @@
 
     .table-select {
         width: 100%;
+    }
+
+    /* 穿透类型说明样式 */
+    .proxy-type-section {
+        margin-bottom: 0px;
+        text-align: left;
+    }
+
+    .section-title {
+        font-size: 16px;
+        font-weight: bold;
+        color: #2c3e50;
+        margin: 0 0 10px 0;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #667eea;
+        display: inline-block;
+    }
+
+    .proxy-type-description {
+        padding: 10px;
+    }
+
+    .proxy-type-description :deep(.el-descriptions__label) {
+        font-weight: bold;
+        width: 120px;
+        background: #f5f7fa;
+    }
+
+    .proxy-type-description :deep(.el-descriptions__content) {
+        color: #606266;
+    }
+
+    /* 加载和错误提示样式 */
+    .loading-indicator,
+    .error-message {
+        text-align: center;
+        padding: 50px;
+        font-size: 18px;
+        color: white;
+    }
+
+    .error-message {
+        color: #ff6b6b;
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 8px;
+        margin: 20px;
     }
 </style>

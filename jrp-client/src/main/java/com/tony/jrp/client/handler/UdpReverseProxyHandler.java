@@ -16,7 +16,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * tcp消息处理器
+ * udp消息处理器
  */
 @Slf4j
 public class UdpReverseProxyHandler extends AbstractProxyHandler {
@@ -77,7 +77,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
                 } else {
                     log.info("收到UPD数据[{}]，准备发送到[{}:{}]！", clientId, originHost, originPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
-                    // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
+                    // 创建一个udp客户端，代理转发请求消息到内网并原路返回
                     DatagramSocketOptions clientOptions = new DatagramSocketOptions();
                     clientOptions.setReceiveBufferSize(BUFFER_SIZE);
                     clientOptions.setSendBufferSize(BUFFER_SIZE);

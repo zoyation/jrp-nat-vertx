@@ -26,8 +26,33 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
      */
     private final Map<Integer, NetSocket> netSocketMap = new ConcurrentHashMap<>();
 
+    /**
+     * TCP客户端单例（HTTP），用于复用连接
+     */
+    private final NetClient httpClient;
+
+    /**
+     * TCP客户端单例（HTTPS），用于复用连接
+     */
+    private final NetClient httpsClient;
+
     public TcpReverseProxyHandler(Vertx vertx) {
         super(vertx);
+        // 初始化HTTP TCP客户端单例
+        NetClientOptions httpOptions = new NetClientOptions();
+        httpOptions.setReceiveBufferSize(BUFFER_SIZE);
+        httpOptions.setSendBufferSize(BUFFER_SIZE);
+        httpOptions.setConnectTimeout(CONNECT_TIMEOUT);
+        this.httpClient = vertx.createNetClient(httpOptions);
+
+        // 初始化HTTPS TCP客户端单例
+        NetClientOptions httpsOptions = new NetClientOptions();
+        httpsOptions.setReceiveBufferSize(BUFFER_SIZE);
+        httpsOptions.setSendBufferSize(BUFFER_SIZE);
+        httpsOptions.setConnectTimeout(CONNECT_TIMEOUT);
+        httpsOptions.setSsl(true);
+        httpsOptions.setTrustAll(true);
+        this.httpsClient = vertx.createNetClient(httpsOptions);
     }
 
     @Override
@@ -59,17 +84,9 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                 } else {
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, originHost, originPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
-                    // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
-                    NetClientOptions clientOptions = new NetClientOptions();
-                    clientOptions.setReceiveBufferSize(BUFFER_SIZE);
-                    clientOptions.setSendBufferSize(BUFFER_SIZE);
-                    clientOptions.setConnectTimeout(CONNECT_TIMEOUT);
-                    if (https) {
-                        clientOptions.setSsl(true);
-                        clientOptions.setTrustAll(true);
-                    }
-                    NetClient netClient = vertx.createNetClient(clientOptions);
-                    netClient.connect(originPort, originHost, asyncResult -> {
+                    // 根据是否HTTPS选择对应的TCP客户端
+                    NetClient selectedClient = https ? httpsClient : httpClient;
+                    selectedClient.connect(originPort, originHost, asyncResult -> {
                         try {
                             if (asyncResult.succeeded()) {
                                 NetSocket proxySocket = asyncResult.result();
@@ -158,6 +175,13 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
             log.info("停止TCP转发服务");
             netSocketMap.values().forEach(NetSocket::close);
             netSocketMap.clear();
+        }
+        // 关闭TCP客户端
+        if (httpClient != null) {
+            httpClient.close();
+        }
+        if (httpsClient != null) {
+            httpsClient.close();
         }
     }
 }
