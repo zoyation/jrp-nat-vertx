@@ -172,8 +172,6 @@ public class ProxyServerManager implements InitializingBean {
                                     log.error("websocket[{}]代理通信异常：{}，执行关闭！", remoteAddress, err.getMessage(), err);
                                     serverWebSocket.close();
                                 });
-                                log.info("来自[{}]的服务注册成功,textHandlerID[{}]:\r\n{}", remoteAddress, textHandlerID, prettily);
-                                serverWebSocket.write(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(RegisterResult.success("注册成功！")))));
                                 RegisterInfo registerInfo = new RegisterInfo();
                                 registerInfo.setId(textHandlerID);
                                 registerInfo.setHost(remoteAddress.host());
@@ -188,6 +186,10 @@ public class ProxyServerManager implements InitializingBean {
                                 registerInfo.setStatus(STATUS_ONLINE);
                                 registerMap.put(textHandlerID, registerInfo);
                                 registerService.add(registerInfo);
+                                log.info("来自[{}]的服务注册成功,textHandlerID[{}]:\r\n{}", remoteAddress, textHandlerID, prettily);
+                                RegisterResult success = RegisterResult.success("注册成功！");
+                                success.setProxies(clientRegister.getProxies());
+                                serverWebSocket.write(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(success))));
                             } catch (Exception e) {
                                 log.error("来自[{}]的服务注册失败:{}", remoteAddress, e.getMessage(), e);
                                 if (serverPing > 0) {

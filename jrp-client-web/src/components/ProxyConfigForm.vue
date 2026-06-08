@@ -104,10 +104,17 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="remote_port" label="穿透端口（服务端）" width="200">
+                            <el-table-column prop="remote_port" label="穿透端口（服务端）" width="300">
                                 <template #default="{ row, $index }">
                                     <el-form-item :prop="`remote_proxies[${$index}].remote_port`" :rules="rules.remote_port">
-                                        <el-input v-model.number="row.remote_port" type="number" :min="0" size="large" class="table-input"/>
+                                        <el-input 
+                                            v-model.number="row.remote_port" 
+                                            type="number" 
+                                            :min="0" 
+                                            size="large" 
+                                            class="table-input"
+                                            placeholder="留空则服务端自动分配"
+                                        />
                                     </el-form-item>
                                 </template>
                             </el-table-column>
@@ -227,8 +234,7 @@
             { required: true, message: '请选择穿透类型', trigger: 'change' }
         ],
         remote_port: [
-            { required: true, message: '请输入外网访问端口', trigger: 'blur' },
-            { type: 'number', min: 1, max: 65535, message: '端口应在 1-65535 之间', trigger: 'blur' }
+            { validator: validateRemotePort, trigger: 'blur' }
         ]
     };
 
@@ -256,6 +262,23 @@
         } else {
             callback(new Error('请输入有效的服务地址格式'));
         }
+    }
+
+    // 自定义校验函数 - 远程端口校验
+    function validateRemotePort(rule, value, callback) {
+        // 如果为空，允许通过（服务端自动分配）
+        if (value === null || value === undefined || value === '') {
+            return callback();
+        }
+        
+        // 如果有值，则校验端口范围
+        if (typeof value === 'number') {
+            if (value < 1 || value > 65535) {
+                return callback(new Error('端口应在 1-65535 之间'));
+            }
+        }
+        
+        callback();
     }
 
     const isLoading = ref(false);
@@ -368,6 +391,16 @@
     function saveConfig() {
         proxyConfigFormRef.value.validate((valid) => {
             if (valid) {
+                // 校验穿透端口是否重复
+                const portValidationResult = validateDuplicatePorts();
+                if (!portValidationResult.valid) {
+                    ElMessage({
+                        type: 'error',
+                        message: portValidationResult.message,
+                    });
+                    return false;
+                }
+
                 ElMessageBox.confirm(
                     '确定要保存配置吗？',
                     'Warning',
@@ -390,8 +423,9 @@
                         configData.message = '';
                         changeFlag.value=false;
                         setTimeout(() => {
+                            fetchConfig()
                             updateStatus();
-                        },1500);
+                        },3000);
                     }).catch(() => {
                         ElMessage({
                         type: 'info',
@@ -412,6 +446,25 @@
                 return false;
             }
         });
+    }
+
+    // 校验穿透端口是否重复
+    function validateDuplicatePorts() {
+        const ports = [];
+        for (let i = 0; i < configData.remote_proxies.length; i++) {
+            const proxy = configData.remote_proxies[i];
+            // 只校验已填写的端口（空端口由服务端自动分配）
+            if (proxy.remote_port !== null && proxy.remote_port !== undefined && proxy.remote_port !== '') {
+                if (ports.includes(proxy.remote_port)) {
+                    return {
+                        valid: false,
+                        message: `穿透端口 ${proxy.remote_port} 重复，请检查后重新提交`
+                    };
+                }
+                ports.push(proxy.remote_port);
+            }
+        }
+        return { valid: true, message: '' };
     }
 </script>
 

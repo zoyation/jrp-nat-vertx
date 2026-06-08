@@ -87,12 +87,34 @@ public class RedisConfigServiceImpl implements IConfigService, InitializingBean 
             }).onFailure(throwable -> {
                 ctx.response().setStatusCode(500);
                 this.end(() -> "获取原始配置异常：" + throwable.getMessage(), ctx);
-            })
-            ;
+            });
 
         });
     }
-
+    /**
+     * 保存配置信息
+     *
+     * @param list 配置信息列表
+     * @return 配置信息
+     */
+    public int save(List<ClientProxy> list){
+        redisAPI.hgetall(CONFIGURATION).onSuccess(response -> {
+            ProxyClientConfig proxyClientConfig = Json.decodeValue(response.get(JRP_CLIENT_CONFIG).toString(), ProxyClientConfig.class);
+            proxyClientConfig.setRemote_proxies(list);
+            List<String> dataList = new ArrayList<>(2);
+            dataList.add(CONFIGURATION);
+            dataList.add(JRP_CLIENT_CONFIG);
+            dataList.add(Json.encode(proxyClientConfig));
+            redisAPI.hset(dataList).onSuccess(setResponse -> {
+                log.info("保存成功");
+            }).onFailure(throwable -> {
+                //抛出异常
+                log.error("保存异常：{}", throwable.getMessage(), throwable);
+                throw new RuntimeException(throwable);
+            });
+        });
+        return list.size();
+    }
     /**
      * 初始化配置
      *

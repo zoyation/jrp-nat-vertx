@@ -4,6 +4,7 @@ import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.utils.PortChecker;
 import com.tony.jrp.server.service.ITraversalService;
+import com.tony.jrp.server.util.TraversalUtil;
 import com.tony.jrp.server.verticle.RegisterTraversalVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
@@ -21,6 +22,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static com.tony.jrp.server.util.TraversalUtil.MAX_PORT;
+import static com.tony.jrp.server.util.TraversalUtil.MIN_PORT;
+
 /**
  * 穿透服务初始化控制类
  * 接收注册信息，启动穿透服务
@@ -28,14 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Service
 @Slf4j
 public class TraversalServiceImpl implements ITraversalService {
-    /**
-     * 允许穿透的最小端口
-     */
-    public static final int MIN_PORT = 1024;
-    /**
-     * 允许穿透的最大端口49151
-     */
-    public static final int MAX_PORT = 49151;
+
     @Autowired
     protected Vertx vertx;
     /**
@@ -64,16 +61,11 @@ public class TraversalServiceImpl implements ITraversalService {
                 }
                 return remove;
             });
-            //进行端口检查，如果端口被占用了，提示不能使用
-            List<String> usedPort = new ArrayList<>();
-            for (ClientProxy clientProxy : proxies) {
-                if (clientProxy.getRemote_port() < MIN_PORT || clientProxy.getRemote_port() > MAX_PORT || !PortChecker.isUsable(clientProxy.getRemote_port())) {
-                    usedPort.add(String.valueOf(clientProxy.getRemote_port()));
-                }
-            }
-            if (!usedPort.isEmpty()) {
-                throw new IllegalArgumentException("端口[" + String.join(",", usedPort) + "]已被使用，请使用" + MIN_PORT + "到" + MAX_PORT + "中其它端口！");
+            List<String> invalidPorts = TraversalUtil.getInvalidPorts(proxies);
+            if (!invalidPorts.isEmpty()) {
+                throw new IllegalArgumentException("端口[" + String.join(",", invalidPorts) + "]已被使用，请使用" + MIN_PORT + "到" + MAX_PORT + "中其它端口，或让服务器自动分配！");
             } else {
+                TraversalUtil.allocatePort(proxies);
                 CountDownLatch countDownLatch = new CountDownLatch(1);
                 AtomicBoolean result = new AtomicBoolean();
                 try {
@@ -105,7 +97,6 @@ public class TraversalServiceImpl implements ITraversalService {
             }
         });
     }
-
     @Override
     public Future<String> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
         Promise<String> promise = Promise.promise();

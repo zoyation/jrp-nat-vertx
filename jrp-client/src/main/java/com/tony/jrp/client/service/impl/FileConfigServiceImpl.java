@@ -17,6 +17,7 @@ import org.springframework.core.io.ClassPathResource;
 
 import java.io.*;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -69,7 +70,13 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
      * @param list 配置信息列表
      * @return 配置信息
      */
+    @Override
     public int save(List<ClientProxy> list) {
+        //校验输入的端口号是否有重复
+        if (list.stream().map(ClientProxy::getRemote_port).filter(Objects::nonNull).distinct().count() != list.size()) {
+            //提示到具体端口号
+            throw new RuntimeException("不通穿透配置端口号重复");
+        }
         ProxyClientConfig proxyConfig;
         try {
             proxyConfig = getConfig();

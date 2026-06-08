@@ -1,4 +1,4 @@
-# jrp内网穿透工具(Java Reverse Proxy Network Address Translation)
+# jrp内网穿透工具(Java Remote Proxy Network Address Translation)
 
 ## jrp介绍
 

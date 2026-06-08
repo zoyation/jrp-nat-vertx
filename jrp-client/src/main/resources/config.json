@@ -18,7 +18,7 @@
     },
     {
       "id": "3",
-      "name": "智能代理（同时支持http、https、socks代理穿透）",
+      "name": "智能代理（同时支持http、https、socks正向代理穿透）",
       "type": "SMART_PROXY",
       "remote_port": 1080
     }

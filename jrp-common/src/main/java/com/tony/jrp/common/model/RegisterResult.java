@@ -2,6 +2,8 @@ package com.tony.jrp.common.model;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * 客户端注册结果
  */
@@ -15,7 +17,10 @@ public class RegisterResult {
      * 结果描述
      */
     private String msg;
-
+    /**
+     * 客户端穿透配置列表
+     */
+    private List<ClientProxy> proxies;
     public RegisterResult() {
 
     }

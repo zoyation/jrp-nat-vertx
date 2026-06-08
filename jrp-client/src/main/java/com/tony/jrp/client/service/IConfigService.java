@@ -1,8 +1,10 @@
 package com.tony.jrp.client.service;
 
+import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.config.ConfigStoreOptions;
 import io.vertx.ext.web.RoutingContext;
 
+import java.util.List;
 import java.util.function.Supplier;
 
 public interface IConfigService {
@@ -51,7 +53,13 @@ public interface IConfigService {
      * @param ctx 上下文
      */
     void save(RoutingContext ctx);
-
+    /**
+     * 保存配置信息
+     *
+     * @param list 配置信息列表
+     * @return 配置信息
+     */
+    public int save(List<ClientProxy> list);
     /**
      * 结束
      *

@@ -30,6 +30,10 @@ public class ClientRegister {
      */
     private String password;
     /**
+     * 是否已经完成更新（端口动态生成时，完成更新保存配置，不需要再发送更新消息），true表示已经更新，false表示未更新
+     */
+    private boolean updated = false;
+    /**
      * 客户端穿透配置列表
      */
     private List<ClientProxy> proxies;
