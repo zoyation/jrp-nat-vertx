@@ -220,8 +220,8 @@ public class ProxyClientManager implements InitializingBean {
         //获取配置信息
         router.route(HttpMethod.GET, path + "/config/list").handler(ctx -> configService.list(ctx));
         //保存配置信息
-        router.route(HttpMethod.POST, path + "/config/save").handler(ctx ->{
-            if(this.register!=null&&this.register.isUpdated()){
+        router.route(HttpMethod.POST, path + "/config/save").handler(ctx -> {
+            if (this.register != null && this.register.isUpdated()) {
                 log.info("标识需要发送更新穿透配置信息");
                 this.register.setUpdated(false);
             }
@@ -385,7 +385,7 @@ public class ProxyClientManager implements InitializingBean {
     /**
      * 注册处理器
      *
-     * @param register            注册信息
+     * @param register 注册信息
      * @return 定时器ID
      */
     private Handler<Long> registerTimerHandler(ClientRegister register) {
@@ -407,7 +407,7 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     /**
-     * @param register            穿透注册信息
+     * @param register 穿透注册信息
      * @return true:注册成功，false:注册失败
      */
     private Future<Boolean> tryRegister(ClientRegister register) {
@@ -578,8 +578,12 @@ public class ProxyClientManager implements InitializingBean {
      */
     private void updateProxies(ClientRegister register, RegisterResult registerResult) {
         List<ClientProxy> proxies = registerResult.getProxies();
-        configService.save(proxies);
-        register.setProxies(proxies);
+        if (proxies != null) {
+            configService.save(proxies);
+            register.setProxies(proxies);
+        } else {
+            proxies = register.getProxies();
+        }
         remotePortClientMap = proxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r));
         this.register = register;
         for (ClientProxy proxy : register.getProxies()) {
@@ -633,9 +637,9 @@ public class ProxyClientManager implements InitializingBean {
     /**
      * 接收到服务端返回的消息
      *
-     * @param webSocket           websocket隧道
-     * @param buffer              数据
-     * @param msgType             消息类型
+     * @param webSocket websocket隧道
+     * @param buffer    数据
+     * @param msgType   消息类型
      */
     private void receiveData(WebSocket webSocket, Buffer buffer, byte msgType) {
         //代理端口
