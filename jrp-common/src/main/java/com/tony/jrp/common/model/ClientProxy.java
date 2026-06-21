@@ -22,7 +22,9 @@ public class ClientProxy implements Serializable {
      * 服务地址
      */
     private String proxy_pass;
-
+    /**
+     * 是否https
+     */
     private boolean https;
     /**
      * 服务ip/domain

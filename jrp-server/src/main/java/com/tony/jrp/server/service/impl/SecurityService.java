@@ -573,4 +573,30 @@ public class SecurityService implements InitializingBean {
                 "Proxy-Agent: JRP-Server\r\n" +
                 "\r\n";
     }
+
+    /**
+     * 添加额外的头信息
+     *
+     * @param data        请求数据
+     * @param headerName  头信息名称
+     * @param headerValue 头信息值
+     * @return 添加头信息后的数据
+     */
+    public Buffer addHead(String data, String headerName, String headerValue) {
+        // 已存在该头信息则不添加（忽略大小写）
+        if (data.toLowerCase().contains(headerName.toLowerCase() + ":")) {
+            return Buffer.buffer(data);
+        }
+        String headerLine = headerName + ": " + headerValue + "\r\n";
+        // 在请求头与请求体之间的空行前插入，而非追加到报文最后
+        int headerEnd = data.indexOf("\r\n\r\n");
+        if (headerEnd != -1) {
+            data = data.substring(0, headerEnd) + "\r\n" + headerLine + data.substring(headerEnd + 2);
+        } else {
+            // 未找到空行（无请求体），追加到末尾
+            data = data + headerLine;
+        }
+        log.debug("addHead: {}", data);
+        return Buffer.buffer(data);
+    }
 }

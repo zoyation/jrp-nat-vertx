@@ -29,7 +29,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
     /**
      * TCP客户端单例（HTTP），用于复用连接
      */
-    private final NetClient httpClient;
+    private final NetClient tcpClient;
 
     /**
      * TCP客户端单例（HTTPS），用于复用连接
@@ -38,12 +38,12 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
 
     public TcpReverseProxyHandler(Vertx vertx) {
         super(vertx);
-        // 初始化HTTP TCP客户端单例
+        // 初始化TCP客户端单例
         NetClientOptions httpOptions = new NetClientOptions();
         httpOptions.setReceiveBufferSize(BUFFER_SIZE);
         httpOptions.setSendBufferSize(BUFFER_SIZE);
         httpOptions.setConnectTimeout(CONNECT_TIMEOUT);
-        this.httpClient = vertx.createNetClient(httpOptions);
+        this.tcpClient = vertx.createNetClient(httpOptions);
 
         // 初始化HTTPS TCP客户端单例
         NetClientOptions httpsOptions = new NetClientOptions();
@@ -85,7 +85,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                     log.info("收到连接请求[{}]，准备连接到[{}:{}]！", clientId, originHost, originPort);
                     CountDownLatch downLatch = new CountDownLatch(1);
                     // 根据是否HTTPS选择对应的TCP客户端
-                    NetClient selectedClient = https ? httpsClient : httpClient;
+                    NetClient selectedClient = https ? httpsClient : tcpClient;
                     selectedClient.connect(originPort, originHost, asyncResult -> {
                         try {
                             if (asyncResult.succeeded()) {
@@ -142,21 +142,23 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
      */
     private static void sendTcpData(ClientProxy clientProxy, Buffer data, NetSocket netSocket) {
         String dataStr = data.toString();
-        if (dataStr.contains("Host:")) {
+        if (isHttpRequest(dataStr)) {
             //替换Host和Referer值，避免被内网服务器拦截
             // 替换 Host 值
-            dataStr = dataStr.replaceAll("Host: .*", "Host: " + clientProxy.getHost() + ":" + clientProxy.getPort());
+            dataStr = dataStr.replaceFirst("(?m)^Host: .*", "Host: " + clientProxy.getHost() + ":" + clientProxy.getPort());
             // 替换 Referer 值，保持协议一致性
-            // 更完善的处理方式
             if (dataStr.contains("Referer:")) {
                 //获取Referer值
                 int index = dataStr.indexOf("Referer: ");
-                String referer = dataStr.substring(index + "Referer: ".length(), dataStr.indexOf("\r\n", index));
-                int uriIndex = referer.indexOf("/", 7);
-                if (uriIndex != -1) {
-                    dataStr = dataStr.replace(referer, clientProxy.getProxy_pass() + referer.substring(uriIndex));
-                } else {
-                    dataStr = dataStr.replace(referer, clientProxy.getProxy_pass());
+                int lineEnd = dataStr.indexOf("\r\n", index);
+                if (lineEnd != -1) {
+                    String referer = dataStr.substring(index + "Referer: ".length(), lineEnd);
+                    int uriIndex = referer.indexOf("/", 7);
+                    if (uriIndex != -1) {
+                        dataStr = dataStr.replace(referer, clientProxy.getProxy_pass() + referer.substring(uriIndex));
+                    } else {
+                        dataStr = dataStr.replace(referer, clientProxy.getProxy_pass());
+                    }
                 }
             }
             netSocket.write(Buffer.buffer(dataStr));
@@ -169,6 +171,17 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
         }
     }
 
+    /**
+     * 判断数据是否为HTTP请求（以HTTP方法开头）
+     */
+    private static boolean isHttpRequest(String data) {
+        return data.startsWith("GET ") || data.startsWith("POST ")
+                || data.startsWith("PUT ") || data.startsWith("DELETE ")
+                || data.startsWith("HEAD ") || data.startsWith("OPTIONS ")
+                || data.startsWith("PATCH ") || data.startsWith("TRACE ")
+                || data.startsWith("CONNECT ");
+    }
+
     @Override
     public void close() throws IOException {
         if (!netSocketMap.isEmpty()) {
@@ -177,8 +190,8 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
             netSocketMap.clear();
         }
         // 关闭TCP客户端
-        if (httpClient != null) {
-            httpClient.close();
+        if (tcpClient != null) {
+            tcpClient.close();
         }
         if (httpsClient != null) {
             httpsClient.close();
