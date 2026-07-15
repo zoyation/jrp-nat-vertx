@@ -12,7 +12,7 @@ import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
-import com.tony.jrp.common.utils.CPUUtils;
+import com.tony.jrp.common.utils.ClientIdUtils;
 import io.vertx.config.ConfigRetriever;
 import io.vertx.config.ConfigRetrieverOptions;
 import io.vertx.core.Future;
@@ -277,7 +277,7 @@ public class ProxyClientManager implements InitializingBean {
             try {
                 // 构建更新消息
                 ClientRegister register = new ClientRegister();
-                register.setId(CPUUtils.getCpuId());
+                register.setId(ClientIdUtils.getClientId());
                 register.setToken(properties.getToken());
                 register.setUsername(properties.getUsername());
                 register.setPassword(properties.getPassword());
@@ -346,7 +346,7 @@ public class ProxyClientManager implements InitializingBean {
                 return;
             }
             ClientRegister register = new ClientRegister();
-            register.setId(CPUUtils.getCpuId());
+            register.setId(ClientIdUtils.getClientId());
             register.setToken(properties.getToken());
             register.setUsername(properties.getUsername());
             register.setPassword(properties.getPassword());
