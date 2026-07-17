@@ -1,7 +1,14 @@
 import axios from 'axios';
 // Create axios instance with base configuration
+
+function resolveApiBase() {
+    const path = window.location.pathname;        // 例如 /jrp-client/web/ 或 /app/jrp-client/web/
+    // 去掉末尾的 /web（及可选斜杠），得到接口前缀
+    const base = path.replace(/\/web\/?$/, '');
+    return base || '/jrp-client';
+}
 const apiClient = axios.create({
-  baseURL: '/jrp-client',
+  baseURL: resolveApiBase(),
   headers: {
     'Content-Type': 'application/json',
   },

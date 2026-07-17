@@ -72,10 +72,22 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
      */
     @Override
     public int save(List<ClientProxy> list) {
-        //校验输入的端口号是否有重复
-        if (list.stream().map(ClientProxy::getRemote_port).filter(Objects::nonNull).distinct().count() != list.size()) {
-            //提示到具体端口号
-            throw new RuntimeException("不通穿透配置端口号重复");
+        // 校验路由规则配置
+        for (ClientProxy proxy : list) {
+            if (proxy.getRoutes() != null && !proxy.getRoutes().isEmpty()) {
+                // 只有HTTP/HTTPS类型支持路由规则
+                if (proxy.getType() != com.tony.jrp.common.enums.ServiceType.HTTP
+                        && proxy.getType() != com.tony.jrp.common.enums.ServiceType.HTTPS) {
+                    throw new RuntimeException("服务[" + proxy.getName() + "]仅HTTP/HTTPS类型支持配置路由规则");
+                }
+                // 校验路由路径不重复
+                long distinctLocations = proxy.getRoutes().stream()
+                        .map(r -> r.getLocation() == null || r.getLocation().isEmpty() ? "/" : r.getLocation())
+                        .distinct().count();
+                if (distinctLocations < proxy.getRoutes().size()) {
+                    throw new RuntimeException("服务[" + proxy.getName() + "]下存在相同的路由路径，请配置不同的location");
+                }
+            }
         }
         ProxyClientConfig proxyConfig;
         try {

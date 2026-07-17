@@ -2,6 +2,7 @@ package com.tony.jrp.client.handler;
 
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.ClientProxy;
+import com.tony.jrp.common.model.RouteRule;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.WebSocket;
@@ -14,6 +15,8 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * tcp消息处理器
@@ -143,6 +146,22 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
     private static void sendTcpData(ClientProxy clientProxy, Buffer data, NetSocket netSocket) {
         String dataStr = data.toString();
         if (isHttpRequest(dataStr)) {
+            // 剥离location路径前缀（仅当传入的是RouteRule时）
+            String location = null;
+            if (clientProxy instanceof RouteRule) {
+                location = ((RouteRule) clientProxy).getLocation();
+            }
+            // 获取proxy_pass中的路径前缀
+            String proxyPath = clientProxy.getPath();
+            if (proxyPath == null) {
+                proxyPath = "";
+            }
+            if (location != null && !location.isEmpty() && !"/".equals(location)) {
+                dataStr = rewriteRequestPath(dataStr, location, proxyPath);
+            } else if (!proxyPath.isEmpty()) {
+                // 无location但有proxy_pass路径，直接加上路径前缀
+                dataStr = prependPath(dataStr, proxyPath);
+            }
             //替换Host和Referer值，避免被内网服务器拦截
             // 替换 Host 值
             dataStr = dataStr.replaceFirst("(?m)^Host: .*", "Host: " + clientProxy.getHost() + ":" + clientProxy.getPort());
@@ -180,6 +199,75 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                 || data.startsWith("HEAD ") || data.startsWith("OPTIONS ")
                 || data.startsWith("PATCH ") || data.startsWith("TRACE ")
                 || data.startsWith("CONNECT ");
+    }
+
+    /**
+     * 重写请求路径：剥离location前缀并加上proxy_pass路径前缀。
+     * 类似nginx的proxy_pass行为：
+     * location=/api, proxy_pass路径=/backend: /api/users -> /backend/users
+     *
+     * @param dataStr  请求数据
+     * @param location location路径前缀
+     * @param proxyPath proxy_pass中的路径前缀
+     * @return 重写后的请求数据
+     */
+    private static String rewriteRequestPath(String dataStr, String location, String proxyPath) {
+        // 确保location以/开头
+        if (!location.startsWith("/")) {
+            location = "/" + location;
+        }
+        // 移除location末尾的斜杠（避免//users的情况）
+        if (location.endsWith("/") && location.length() > 1) {
+            location = location.substring(0, location.length() - 1);
+        }
+        int lineEnd = dataStr.indexOf("\r\n");
+        if (lineEnd == -1) {
+            return dataStr;
+        }
+        String requestLine = dataStr.substring(0, lineEnd);
+        // 匹配请求行中的路径：METHOD /path HTTP/x.x
+        Matcher matcher = Pattern.compile("^(\\S+\\s+)(" + Pattern.quote(location) + ")(/.*)?(\\s+.*)$").matcher(requestLine);
+        if (matcher.matches()) {
+            String method = matcher.group(1);
+            String remaining = matcher.group(3);
+            String httpVersion = matcher.group(4);
+            // 拼接proxy_pass路径和剩余路径
+            String newPath;
+            if (remaining != null && !remaining.isEmpty()) {
+                newPath = proxyPath + remaining;
+            } else {
+                newPath = proxyPath.isEmpty() ? "/" : proxyPath;
+            }
+            String newRequestLine = method + newPath + httpVersion;
+            dataStr = newRequestLine + dataStr.substring(lineEnd);
+        }
+        return dataStr;
+    }
+
+    /**
+     * 在请求路径前加上proxy_pass路径前缀。
+     * 例如：proxyPath=/app, GET /users -> GET /app/users
+     *
+     * @param dataStr   请求数据
+     * @param proxyPath proxy_pass中的路径前缀
+     * @return 重写后的请求数据
+     */
+    private static String prependPath(String dataStr, String proxyPath) {
+        int lineEnd = dataStr.indexOf("\r\n");
+        if (lineEnd == -1) {
+            return dataStr;
+        }
+        String requestLine = dataStr.substring(0, lineEnd);
+        Matcher matcher = Pattern.compile("^(\\S+\\s+)(/.*)(\\s+.*)$").matcher(requestLine);
+        if (matcher.matches()) {
+            String method = matcher.group(1);
+            String path = matcher.group(2);
+            String httpVersion = matcher.group(3);
+            String newPath = proxyPath + path;
+            String newRequestLine = method + newPath + httpVersion;
+            dataStr = newRequestLine + dataStr.substring(lineEnd);
+        }
+        return dataStr;
     }
 
     @Override

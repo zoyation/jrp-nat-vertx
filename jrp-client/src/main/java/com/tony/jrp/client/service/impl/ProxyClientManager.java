@@ -12,6 +12,7 @@ import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
+import com.tony.jrp.common.model.RouteRule;
 import com.tony.jrp.common.utils.ClientIdUtils;
 import io.vertx.config.ConfigRetriever;
 import io.vertx.config.ConfigRetrieverOptions;
@@ -42,6 +43,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -112,6 +115,45 @@ public class ProxyClientManager implements InitializingBean {
     private String errorMessage = "";
     Map<Integer, ClientProxy> remotePortClientMap = new ConcurrentHashMap<>();
     private final Map<ServiceType, AbstractProxyHandler> handlerMap = new ConcurrentHashMap<>();
+
+    /**
+     * HTTP请求行路径提取正则
+     */
+    private static final Pattern HTTP_PATH_PATTERN = Pattern.compile("^\\S+\\s+(\\S+)\\s+", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 解析proxy_pass地址，提取host、port、path。
+     * 支持格式如：http://host:port/path、https://host/path、host:port/path 等。
+     * 类似nginx的proxy_pass，当包含路径时，转发请求会加上该路径前缀。
+     *
+     * @param proxy     需要设置解析结果的ClientProxy对象
+     * @param proxyPass 原始proxy_pass地址
+     */
+    private static void parseProxyPass(ClientProxy proxy, String proxyPass) {
+        proxy.setProxy_pass(proxyPass);
+        String lowerCasePass = proxyPass.toLowerCase().trim();
+        boolean https = lowerCasePass.startsWith("https");
+        proxy.setHttps(https);
+        // 去掉协议前缀
+        String hostPortPath = lowerCasePass.replaceAll("^https?://", "");
+        // 分离host:port和path（取第一个/作为路径起始）
+        String path = "";
+        int slashIdx = hostPortPath.indexOf("/");
+        if (slashIdx > 0) {
+            path = hostPortPath.substring(slashIdx);
+            hostPortPath = hostPortPath.substring(0, slashIdx);
+        }
+        proxy.setPath(path);
+        // 解析host和port
+        int index = hostPortPath.lastIndexOf(":");
+        if (index > 0) {
+            proxy.setHost(hostPortPath.substring(0, index));
+            proxy.setPort(Integer.parseInt(hostPortPath.substring(index + 1)));
+        } else {
+            proxy.setHost(hostPortPath);
+            proxy.setPort(https ? 443 : 80);
+        }
+    }
 
     @Data
     private static class RegisterStatus {
@@ -214,9 +256,8 @@ public class ProxyClientManager implements InitializingBean {
         HttpServer server = vertx.createHttpServer();
         Router router = Router.router(vertx);
         StaticHandler dist = StaticHandler.create("dist");
-        String webUrl = path + "/web";
-        router.route(HttpMethod.GET, "/").handler(ctx -> ctx.redirect(webUrl));
-        router.route(HttpMethod.GET, webUrl + "/*").handler(dist);
+        String webAndPrefixPath = path;
+        router.route(HttpMethod.GET, "/").handler(ctx -> ctx.redirect(webAndPrefixPath));
         //获取配置信息
         router.route(HttpMethod.GET, path + "/config/list").handler(ctx -> configService.list(ctx));
         //保存配置信息
@@ -232,10 +273,12 @@ public class ProxyClientManager implements InitializingBean {
             RegisterStatus registerStatus = registerWebSocket == null ? RegisterStatus.fail(errorMessage, registerHost) : RegisterStatus.ok("穿透成功！", registerHost);
             return Json.encode(registerStatus);
         }, ctx));
+        //其它前端页面
+        router.route(HttpMethod.GET, webAndPrefixPath + "/*").handler(dist);
         server.requestHandler(router);
         server.listen(port);
         if (log.isInfoEnabled()) {
-            log.info("start server success，可浏览器访问[http://127.0.0.1:{}{}]进行穿透配置。", port, webUrl);
+            log.info("start server success，可浏览器访问[http://127.0.0.1:{}{}]进行穿透配置。", port, webAndPrefixPath);
         }
         return server;
     }
@@ -291,23 +334,24 @@ public class ProxyClientManager implements InitializingBean {
                     updatedProxy.setType(proxy.getType());
                     updatedProxy.setRemote_port(proxy.getRemote_port());
 
-                    // 格式 host:port
+                    // 解析主proxy_pass
                     String proxyPass = proxy.getProxy_pass();
                     if (StringUtils.hasText(proxyPass)) {
-                        updatedProxy.setProxy_pass(proxyPass);
-                        // 去掉http://、https://等前缀
-                        String lowerCasePass = proxyPass.toLowerCase().trim();
-                        boolean https = lowerCasePass.startsWith("https");
-                        updatedProxy.setHttps(https);
-                        proxyPass = lowerCasePass.replaceAll("^https?://", "");
-                        int index = proxyPass.lastIndexOf(":");
-                        if (index > 0) {
-                            updatedProxy.setHost(proxyPass.substring(0, index));
-                            updatedProxy.setPort(Integer.parseInt(proxyPass.substring(index + 1)));
-                        } else {
-                            updatedProxy.setHost(proxyPass);
-                            updatedProxy.setPort(https ? 443 : 80);
+                        parseProxyPass(updatedProxy, proxyPass);
+                    }
+                    // 解析路由规则中的proxy_pass
+                    if (proxy.getRoutes() != null) {
+                        List<RouteRule> parsedRoutes = new ArrayList<>();
+                        for (RouteRule route : proxy.getRoutes()) {
+                            RouteRule parsedRoute = new RouteRule();
+                            parsedRoute.setLocation(route.getLocation());
+                            String routePass = route.getProxy_pass();
+                            if (StringUtils.hasText(routePass)) {
+                                parseProxyPass(parsedRoute, routePass);
+                            }
+                            parsedRoutes.add(parsedRoute);
                         }
+                        updatedProxy.setRoutes(parsedRoutes);
                     }
                     updatedProxies.add(updatedProxy);
                 }
@@ -354,18 +398,15 @@ public class ProxyClientManager implements InitializingBean {
                 //格式 host:port
                 String proxyPass = proxy.getProxy_pass();
                 if (StringUtils.hasText(proxyPass)) {
-                    //去掉http://、https://等前缀
-                    String lowerCasePass = proxyPass.toLowerCase().trim();
-                    boolean https = lowerCasePass.startsWith("https");
-                    proxy.setHttps(https);
-                    proxyPass = lowerCasePass.replaceAll("^https?://", "");
-                    int index = proxyPass.lastIndexOf(":");
-                    if (index > 0) {
-                        proxy.setHost(proxyPass.substring(0, index));
-                        proxy.setPort(Integer.parseInt(proxyPass.substring(index + 1)));
-                    } else {
-                        proxy.setHost(proxyPass);
-                        proxy.setPort(https ? 443 : 80);
+                    parseProxyPass(proxy, proxyPass);
+                }
+                // 解析路由规则的proxy_pass
+                if (proxy.getRoutes() != null) {
+                    for (RouteRule route : proxy.getRoutes()) {
+                        String routePass = route.getProxy_pass();
+                        if (StringUtils.hasText(routePass)) {
+                            parseProxyPass(route, routePass);
+                        }
                     }
                 }
             }
@@ -584,7 +625,7 @@ public class ProxyClientManager implements InitializingBean {
         } else {
             proxies = register.getProxies();
         }
-        remotePortClientMap = proxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r));
+        remotePortClientMap = proxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r, (a, b) -> a));
         this.register = register;
         for (ClientProxy proxy : register.getProxies()) {
             if (proxy.getType() != null) {
@@ -651,7 +692,7 @@ public class ProxyClientManager implements InitializingBean {
         //收到外网穿透服务器发送的客户端请求通知
         Buffer data = buffer.getBuffer(TYPE_PORT_REQUEST_ID_LEN, buffer.length());
         log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", requestId);
-        ClientProxy proxy = remotePortClientMap.get(remotePort);
+        ClientProxy proxy = resolveProxy(remotePort, data);
         if (proxy == null) {
             log.warn("未找到代理端口[{}]对应的客户端！", remotePort);
             return;
@@ -673,6 +714,52 @@ public class ProxyClientManager implements InitializingBean {
                 handlerMap.get(ServiceType.SMART_PROXY).handle(webSocket, msgType, msgId, requestId, proxy, data);
                 break;
         }
+    }
+
+    /**
+     * 按端口和请求路径解析代理配置（最长前缀匹配路由规则）
+     *
+     * @param remotePort 远程端口
+     * @param data       请求数据
+     * @return 匹配到的ClientProxy或RouteRule
+     */
+    private ClientProxy resolveProxy(Integer remotePort, Buffer data) {
+        ClientProxy proxy = remotePortClientMap.get(remotePort);
+        if (proxy == null) {
+            return null;
+        }
+        List<RouteRule> routes = proxy.getRoutes();
+        if (routes == null || routes.isEmpty()) {
+            return proxy;
+        }
+        // 按HTTP请求路径前缀匹配
+        String dataStr = data.toString();
+        Matcher matcher = HTTP_PATH_PATTERN.matcher(dataStr);
+        if (!matcher.find()) {
+            return proxy;
+        }
+        String requestPath = matcher.group(1);
+        ClientProxy bestMatch = null;
+        int bestLen = -1;
+        for (RouteRule route : routes) {
+            String location = route.getLocation();
+            if (location == null || location.isEmpty() || "/".equals(location)) {
+                if (bestMatch == null) {
+                    bestMatch = route;
+                    bestLen = 0;
+                }
+                continue;
+            }
+            if (requestPath.startsWith(location) && location.length() > bestLen) {
+                bestMatch = route;
+                bestLen = location.length();
+            }
+        }
+        if (bestMatch != null) {
+            log.debug("路径[{}]路由匹配：port={}, location=[{}] -> {}:{}", requestPath, remotePort,
+                    ((RouteRule) bestMatch).getLocation(), bestMatch.getHost(), bestMatch.getPort());
+        }
+        return bestMatch != null ? bestMatch : proxy;
     }
 
     /**

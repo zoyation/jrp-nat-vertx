@@ -4,6 +4,7 @@ import com.tony.jrp.common.enums.ServiceType;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.util.List;
 
 /**
  * 内网客户端代理信息
@@ -35,6 +36,11 @@ public class ClientProxy implements Serializable {
      */
     private Integer port;
     /**
+     * proxy_pass中的路径前缀（如 http://host:8080/app 中的 /app）。
+     * 类似nginx的proxy_pass URI，转发时会将请求路径加上该前缀。
+     */
+    private String path;
+    /**
      * 穿透类型 默认HTTP
      */
     private ServiceType type = ServiceType.HTTP;
@@ -42,6 +48,12 @@ public class ClientProxy implements Serializable {
      * 穿透外网访问端口
      */
     private Integer remote_port;
-
+    /**
+     * 路由规则列表，仅HTTP/HTTPS类型生效。
+     * 每条规则定义一个路径前缀和对应的本地原始服务。
+     * 请求通过最长前缀匹配选择对应路由规则转发到不同原始服务。
+     * 为空时所有请求转发到proxy_pass配置的默认服务。
+     */
+    private List<RouteRule> routes;
 
 }

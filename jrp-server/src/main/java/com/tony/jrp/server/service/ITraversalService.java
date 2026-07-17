@@ -18,7 +18,7 @@ public interface ITraversalService {
      * @param webSocket      客户端请求
      * @return 启动结果
      */
-    Future<Boolean> start(ClientRegister clientRegister, ServerWebSocket webSocket);
+    Future<String> start(ClientRegister clientRegister, ServerWebSocket webSocket);
 
     /**
      * 停止代理转发服务
@@ -26,5 +26,5 @@ public interface ITraversalService {
      * @param clientProxyList 被代理客户端信息
      * @return 停止结果
      */
-    Future<String> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket);
+    Future<Void> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket);
 }

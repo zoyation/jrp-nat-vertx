@@ -146,8 +146,8 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
         log.info("清理端口[{}]下代理和缓存！", clientProxy.getRemote_port());
         vertx.cancelTimer(cleanUpId);
         requestIdTimestamps.clear();
-        datagramSocket.close();
-        httpServer.close();
+        //datagramSocket.close();
+        //httpServer.close();
         super.stop();
     }
 }

@@ -104,7 +104,7 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="remote_port" label="穿透端口（服务端）" width="300">
+                            <el-table-column prop="remote_port" label="穿透端口（服务端）" width="220">
                                 <template #default="{ row, $index }">
                                     <el-form-item :prop="`remote_proxies[${$index}].remote_port`" :rules="rules.remote_port">
                                         <el-input 
@@ -116,6 +116,19 @@
                                             placeholder="留空则服务端自动分配"
                                         />
                                     </el-form-item>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="路由规则" width="180">
+                                <template #default="{ row, $index }">
+                                    <el-button
+                                        v-if="['HTTP', 'HTTPS'].includes(row.type)"
+                                        type="primary"
+                                        link
+                                        @click="openRouteDialog($index)"
+                                    >
+                                        📁 配置路由（{{ (row.routes && row.routes.length) || 0 }}）
+                                    </el-button>
+                                    <span v-else style="color: #999;">仅HTTP/HTTPS</span>
                                 </template>
                             </el-table-column>
                             <el-table-column label="穿透外网地址">
@@ -146,16 +159,51 @@
                             </el-table-column>
                         </el-table>
                         
+                        <!-- 路由规则配置弹窗 -->
+                        <el-dialog
+                            v-model="routeDialogVisible"
+                            :title="'配置路由规则 - ' + (currentRouteProxy ? currentRouteProxy.name : '')"
+                            width="720px"
+                            destroy-on-close
+                        >
+                            <div style="margin-bottom: 12px; color: #666;">
+                                <span>配置不同路径前缀将请求转发到不同本地服务，留空或“/”为默认路由。按最长前缀匹配。</span>
+                            </div>
+                            <el-table :data="currentRoutes" style="width: 100%" border size="small">
+                                <el-table-column type="index" label="序号" width="60" align="center" />
+                                <el-table-column label="路由路径" width="200">
+                                    <template #default="{ row }">
+                                        <el-input v-model="row.location" placeholder="如 /api（留空为默认）" />
+                                    </template>
+                                </el-table-column>
+                                <el-table-column label="本地服务地址">
+                                    <template #default="{ row }">
+                                        <el-input v-model="row.proxy_pass" placeholder="如 http://127.0.0.1:8080" />
+                                    </template>
+                                </el-table-column>
+                                <el-table-column label="操作" width="80" align="center">
+                                    <template #default="{ $index }">
+                                        <el-button type="danger" link @click="removeRoute($index)">删除</el-button>
+                                    </template>
+                                </el-table-column>
+                            </el-table>
+                            <el-button type="primary" link @click="addRoute" style="margin-top: 10px;">➕ 添加路由规则</el-button>
+                            <template #footer>
+                                <el-button @click="routeDialogVisible = false">取消</el-button>
+                                <el-button type="primary" @click="confirmRoutes">确定</el-button>
+                            </template>
+                        </el-dialog>
+
                         <!-- 穿透类型说明 - 放在最下方 -->
                         <div class="proxy-type-section">
                             <h3 class="section-title">📖 穿透类型说明</h3>
                             <div class="proxy-type-description">
                                 <el-descriptions :column="3" border size="small">
                                     <el-descriptions-item label="HTTP端口映射">
-                                        将HTTP请求转发到指定端口，适用于Web应用
+                                        将HTTP请求转发到指定端口，支持按路径前缀路由到不同本地服务
                                     </el-descriptions-item>
                                     <el-descriptions-item label="HTTPS端口映射">
-                                        将HTTPS请求转发到指定端口，适用于加密Web应用
+                                        将HTTPS请求转发到指定端口，支持按路径前缀路由到不同本地服务
                                     </el-descriptions-item>
                                     <el-descriptions-item label="TCP端口映射">
                                         将TCP流量转发到指定端口，适用于数据库、SSH等
@@ -216,10 +264,52 @@
           name: '',
           type: 'HTTP',
           remote_port: null,
-          proxy_pass: ''
+          proxy_pass: '',
+          routes: []
         }
       ]
     });
+
+    // 路由规则弹窗
+    const routeDialogVisible = ref(false);
+    const currentRouteProxyIndex = ref(-1);
+    const currentRouteProxy = ref(null);
+    const currentRoutes = ref([]);
+
+    function openRouteDialog(index) {
+        currentRouteProxyIndex.value = index;
+        currentRouteProxy.value = configData.remote_proxies[index];
+        // 深拷贝routes避免直接修改原数据
+        currentRoutes.value = JSON.parse(JSON.stringify(configData.remote_proxies[index].routes || []));
+        routeDialogVisible.value = true;
+    }
+
+    function addRoute() {
+        currentRoutes.value.push({ location: '', proxy_pass: '' });
+    }
+
+    function removeRoute(index) {
+        currentRoutes.value.splice(index, 1);
+    }
+
+    function confirmRoutes() {
+        // 校验路由路径不重复
+        const locations = currentRoutes.value.map(r => r.location || '/');
+        const uniqueLocations = new Set(locations);
+        if (uniqueLocations.size < locations.length) {
+            ElMessage({ type: 'error', message: '路由路径不能重复' });
+            return;
+        }
+        // 校验每条路由的proxy_pass不为空
+        for (let i = 0; i < currentRoutes.value.length; i++) {
+            if (!currentRoutes.value[i].proxy_pass) {
+                ElMessage({ type: 'error', message: `第${i + 1}条路由的本地服务地址不能为空` });
+                return;
+            }
+        }
+        configData.remote_proxies[currentRouteProxyIndex.value].routes = currentRoutes.value;
+        routeDialogVisible.value = false;
+    }
 
     // 添加表单校验规则
     const rules = {
@@ -348,7 +438,8 @@
         name: '',
         type: 'HTTP',
         remote_port: null,
-        proxy_pass: ''
+        proxy_pass: '',
+        routes: []
       });
       
       // 使用 nextTick 等待 DOM 更新后滚动到底部
@@ -450,18 +541,23 @@
 
     // 校验穿透端口是否重复
     function validateDuplicatePorts() {
-        const ports = [];
+        const portMap = {};
         for (let i = 0; i < configData.remote_proxies.length; i++) {
             const proxy = configData.remote_proxies[i];
-            // 只校验已填写的端口（空端口由服务端自动分配）
             if (proxy.remote_port !== null && proxy.remote_port !== undefined && proxy.remote_port !== '') {
-                if (ports.includes(proxy.remote_port)) {
-                    return {
-                        valid: false,
-                        message: `穿透端口 ${proxy.remote_port} 重复，请检查后重新提交`
-                    };
+                const key = proxy.remote_port;
+                if (!portMap[key]) {
+                    portMap[key] = [];
                 }
-                ports.push(proxy.remote_port);
+                portMap[key].push({ index: i, type: proxy.type });
+            }
+        }
+        for (const [port, entries] of Object.entries(portMap)) {
+            if (entries.length > 1) {
+                return {
+                    valid: false,
+                    message: `穿透端口 ${port} 重复，请为每条配置设置不同的端口`
+                };
             }
         }
         return { valid: true, message: '' };
