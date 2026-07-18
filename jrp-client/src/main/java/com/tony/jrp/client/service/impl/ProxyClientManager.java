@@ -738,8 +738,9 @@ public class ProxyClientManager implements InitializingBean {
         if (!matcher.find()) {
             return proxy;
         }
+        // HTTP请求路径
         String requestPath = matcher.group(1);
-        ClientProxy bestMatch = null;
+        RouteRule bestMatch = null;
         int bestLen = -1;
         for (RouteRule route : routes) {
             String location = route.getLocation();
@@ -757,7 +758,7 @@ public class ProxyClientManager implements InitializingBean {
         }
         if (bestMatch != null) {
             log.debug("路径[{}]路由匹配：port={}, location=[{}] -> {}:{}", requestPath, remotePort,
-                    ((RouteRule) bestMatch).getLocation(), bestMatch.getHost(), bestMatch.getPort());
+                    bestMatch.getLocation(), bestMatch.getHost(), bestMatch.getPort());
         }
         return bestMatch != null ? bestMatch : proxy;
     }

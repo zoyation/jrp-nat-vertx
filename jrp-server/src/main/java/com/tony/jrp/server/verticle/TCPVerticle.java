@@ -28,8 +28,6 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
     public static final String AUTHORIZATION = "Authorization";
     public static final String X_REAL_IP = "X-Real-IP";
 
-    private NetServer server;
-
     public TCPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
         super(ipv4, serverSocket, securityService, clientRegister, clientProxy);
     }
@@ -47,7 +45,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             options.setSsl(true);
             options.setKeyCertOptions(securityService.getKeyCertOptions());
         }
-        server = this.vertx.createNetServer(options);
+        NetServer server = this.vertx.createNetServer(options);
         boolean httpFlag = clientProxy.getType() == ServiceType.HTTP || clientProxy.getType() == ServiceType.HTTPS;
         // 处理连接请求
         server.connectHandler(clientSocket -> {
@@ -218,9 +216,6 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
 
     @Override
     public void stop() throws Exception {
-        log.info("清理端口[{}]下代理和缓存！", clientProxy.getRemote_port());
-        //clientSocketMap.values().forEach(NetSocket::close);
-        server.close();
         super.stop();
     }
 }
