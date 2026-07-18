@@ -4,7 +4,10 @@ import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.utils.PortChecker;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * 穿透工具类
@@ -34,12 +37,6 @@ public class TraversalUtil {
         //进行端口检查，如果端口被占用了，提示不能使用
         List<String> invalidPorts = new ArrayList<>();
         // 收集当前已配置的远程端口
-        for (ClientProxy proxy : proxies) {
-            if (proxy.getRemote_port() != null &&
-                    proxy.getRemote_port() >= MIN_PORT &&
-                    proxy.getRemote_port() <= MAX_PORT) {
-            }
-        }
         for (ClientProxy clientProxy : proxies) {
             Integer remotePort = clientProxy.getRemote_port();
             // 如果端口不为空且在有效范围内，但被占用，则记录为无效端口

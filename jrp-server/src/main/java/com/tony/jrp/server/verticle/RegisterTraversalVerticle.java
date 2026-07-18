@@ -7,10 +7,8 @@ import com.tony.jrp.common.model.RegisterResult;
 import com.tony.jrp.server.service.impl.SecurityService;
 import com.tony.jrp.server.util.TraversalUtil;
 import io.vertx.core.AbstractVerticle;
-import io.vertx.core.Future;
-import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.*;
+import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import lombok.Getter;
@@ -21,7 +19,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.tony.jrp.server.util.TraversalUtil.MAX_PORT;
 import static com.tony.jrp.server.util.TraversalUtil.MIN_PORT;
@@ -147,6 +144,9 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
         });
         //代理服务里监听指定端口，用于接收转发用户请求到内网服务，并返回到请求端
         for (ClientProxy clientProxy : clientRegister.getProxies()) {
+            if (!clientProxy.isEnable()) {
+                continue;
+            }
             Integer remotePort = clientProxy.getRemote_port();
             synchronized (RegisterTraversalVerticle.this) {
                 if (verticleMap.get(remotePort) != null) {
@@ -180,7 +180,6 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                     .onSuccess(id -> verticleMap.put(remotePort, verticle))
                     .onFailure(Throwable::printStackTrace);
         }
-
     }
 
     /**
@@ -193,16 +192,19 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
             log.warn("新的客户端注册信息为空，不做处理！");
             return;
         }
-        // 1. 找出需要移除的代理（在新配置中不存在的remote_port）
-        List<ClientProxy> noPortClientProxy = newClientRegister.getProxies().stream().filter(proxy -> proxy.getRemote_port() != null&&!verticleMap.containsKey(proxy.getRemote_port())).collect(Collectors.toList());
-        List<String> invalidPorts = TraversalUtil.getInvalidPorts(noPortClientProxy);
+        List<ClientProxy> proxies = newClientRegister.getProxies().stream().filter(ClientProxy::isEnable).collect(Collectors.toList());
+        // 1. 处理新增的指定了远程端口的穿透配置，校验端口
+        List<ClientProxy> newProxyList = proxies.stream().filter(proxy -> proxy.getRemote_port() != null && !verticleMap.containsKey(proxy.getRemote_port())).collect(Collectors.toList());
+        List<String> invalidPorts = TraversalUtil.getInvalidPorts(newProxyList);
         if (!invalidPorts.isEmpty()) {
             log.warn("存在已被占用端口[{}]，不做处理！", invalidPorts);
             throw new IllegalArgumentException("端口[" + String.join(",", invalidPorts) + "]已被使用，请使用" + MIN_PORT + "到" + MAX_PORT + "中其它端口，或让服务器自动分配！");
         }
-        TraversalUtil.allocatePort(newClientRegister.getProxies());
+        // 自动分配端口，如果有未指定远程端口的穿透配置
+        TraversalUtil.allocatePort(proxies);
+        // 移除不存在和禁用的代理（在新配置中不存在的remote_port或者禁用的）
         verticleMap.keySet().stream()
-                .filter(remotePort -> newClientRegister.getProxies().stream()
+                .filter(remotePort -> proxies.stream()
                         .noneMatch(proxy -> remotePort.equals(proxy.getRemote_port())))
                 .forEach(remotePort -> {
                     AbstractProtocolVerticle<?> verticle = verticleMap.remove(remotePort);
@@ -213,7 +215,7 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                     }
                 });
         // 2. 处理新增或更新的代理
-        for (ClientProxy newProxy : newClientRegister.getProxies()) {
+        for (ClientProxy newProxy : proxies) {
             Integer remotePort = newProxy.getRemote_port();
             AbstractProtocolVerticle<?> existingVerticle = verticleMap.get(remotePort);
 

@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import static com.tony.jrp.server.util.TraversalUtil.MAX_PORT;
 import static com.tony.jrp.server.util.TraversalUtil.MIN_PORT;
@@ -42,7 +43,7 @@ public class TraversalServiceImpl implements ITraversalService {
 
     @Override
     public Future<String> start(ClientRegister clientRegister, ServerWebSocket webSocket) {
-        List<ClientProxy> proxies = clientRegister.getProxies();
+        List<ClientProxy> proxies = clientRegister.getProxies().stream().filter(ClientProxy::isEnable).collect(Collectors.toList());
         //停止上次的代理
         Optional<Map.Entry<String, RegisterTraversalVerticle>> exist = verticleMap.entrySet().stream()
                 .filter(entry -> entry.getValue().getClientRegister().getId().equals(clientRegister.getId()))

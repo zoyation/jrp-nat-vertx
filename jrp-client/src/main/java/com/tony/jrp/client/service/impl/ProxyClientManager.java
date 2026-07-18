@@ -34,7 +34,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -318,45 +317,8 @@ public class ProxyClientManager implements InitializingBean {
             // 已建立连接，直接发送更新代理注册信息消息
             log.info("检测到已有连接，直接发送代理配置更新消息");
             try {
-                // 构建更新消息
-                ClientRegister register = new ClientRegister();
-                register.setId(ClientIdUtils.getClientId());
-                register.setToken(properties.getToken());
-                register.setUsername(properties.getUsername());
-                register.setPassword(properties.getPassword());
                 this.register.setUpdated(false);
-                // 处理代理配置
-                List<ClientProxy> updatedProxies = new ArrayList<>();
-                for (ClientProxy proxy : newConfig.getRemote_proxies()) {
-                    ClientProxy updatedProxy = new ClientProxy();
-                    updatedProxy.setId(proxy.getId());
-                    updatedProxy.setName(proxy.getName());
-                    updatedProxy.setType(proxy.getType());
-                    updatedProxy.setRemote_port(proxy.getRemote_port());
-
-                    // 解析主proxy_pass
-                    String proxyPass = proxy.getProxy_pass();
-                    if (StringUtils.hasText(proxyPass)) {
-                        parseProxyPass(updatedProxy, proxyPass);
-                    }
-                    // 解析路由规则中的proxy_pass
-                    if (proxy.getRoutes() != null) {
-                        List<RouteRule> parsedRoutes = new ArrayList<>();
-                        for (RouteRule route : proxy.getRoutes()) {
-                            RouteRule parsedRoute = new RouteRule();
-                            parsedRoute.setLocation(route.getLocation());
-                            String routePass = route.getProxy_pass();
-                            if (StringUtils.hasText(routePass)) {
-                                parseProxyPass(parsedRoute, routePass);
-                            }
-                            parsedRoutes.add(parsedRoute);
-                        }
-                        updatedProxy.setRoutes(parsedRoutes);
-                    }
-                    updatedProxies.add(updatedProxy);
-                }
-                register.setProxies(updatedProxies);
-
+                ClientRegister register = getClientRegister(newConfig.getRemote_proxies());
                 // 发送更新消息
                 String updateJson = Json.encodePrettily(register);
                 log.info("发送代理配置更新消息：\n{}", updateJson);
@@ -389,28 +351,7 @@ public class ProxyClientManager implements InitializingBean {
                 log.warn("没有穿透配置信息，配置穿透信息后进行注册！");
                 return;
             }
-            ClientRegister register = new ClientRegister();
-            register.setId(ClientIdUtils.getClientId());
-            register.setToken(properties.getToken());
-            register.setUsername(properties.getUsername());
-            register.setPassword(properties.getPassword());
-            for (ClientProxy proxy : registerProxies) {
-                //格式 host:port
-                String proxyPass = proxy.getProxy_pass();
-                if (StringUtils.hasText(proxyPass)) {
-                    parseProxyPass(proxy, proxyPass);
-                }
-                // 解析路由规则的proxy_pass
-                if (proxy.getRoutes() != null) {
-                    for (RouteRule route : proxy.getRoutes()) {
-                        String routePass = route.getProxy_pass();
-                        if (StringUtils.hasText(routePass)) {
-                            parseProxyPass(route, routePass);
-                        }
-                    }
-                }
-            }
-            register.setProxies(registerProxies);
+            ClientRegister register = getClientRegister(registerProxies);
             remotePortClientMap = registerProxies.stream().filter(r -> r.getRemote_port() != null).collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r));
             log.info("开始注册...");
             if (reconnectionTimes.get() < properties.getReconnectionTimes()) {
@@ -421,6 +362,32 @@ public class ProxyClientManager implements InitializingBean {
             log.error("内网穿透注册失败：{}", errorMessage, e);
             registerWebSocket = null;
         }
+    }
+
+    private ClientRegister getClientRegister(List<ClientProxy> registerProxies) {
+        ClientRegister register = new ClientRegister();
+        register.setId(ClientIdUtils.getClientId());
+        register.setToken(properties.getToken());
+        register.setUsername(properties.getUsername());
+        register.setPassword(properties.getPassword());
+        for (ClientProxy proxy : registerProxies) {
+            //格式 host:port
+            String proxyPass = proxy.getProxy_pass();
+            if (StringUtils.hasText(proxyPass)) {
+                parseProxyPass(proxy, proxyPass);
+            }
+            // 解析路由规则的proxy_pass
+            if (proxy.getRoutes() != null) {
+                for (RouteRule route : proxy.getRoutes()) {
+                    String routePass = route.getProxy_pass();
+                    if (StringUtils.hasText(routePass)) {
+                        parseProxyPass(route, routePass);
+                    }
+                }
+            }
+        }
+        register.setProxies(registerProxies);
+        return register;
     }
 
     /**
@@ -613,6 +580,8 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     /**
+     * 更新代理信息
+     *
      * @param register       注册信息
      * @param registerResult 注册结果
      *                       更新代理成功后代理数据（外网端口可能是服务端返回）

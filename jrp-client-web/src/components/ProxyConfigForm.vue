@@ -73,7 +73,7 @@
                                             :prop="`remote_proxies[${$index}].type`"
                                             :rules="rules.type"
                                     >
-                                        <el-select v-model="row.type" size="large" class="table-select">
+                                        <el-select v-model="row.type" size="large" class="table-select" @change="handleTypeChange($index)">
                                               <el-option label="HTTP端口映射" value="HTTP" title="将HTTP请求转发到指定端口"/>
                                               <el-option label="HTTPS端口映射" value="HTTPS" title="将HTTPS请求转发到指定端口"/>
                                               <el-option label="TCP端口映射" value="TCP" title="将TCP流量转发到指定端口"/>
@@ -98,8 +98,8 @@
                                                         v-model="row.proxy_pass"
                                                         size="large"
                                                         class="table-input"
-                                                        :disabled="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type)"
-                                                        :placeholder="['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'].includes(row.type) ? '该代理类型无需填写' : '请输入服务地址'"
+                                                        :disabled="isProxyPassDisabled(row)"
+                                                        :placeholder="getProxyPassPlaceholder(row)"
                                                     />
                                     </el-form-item>
                                 </template>
@@ -118,12 +118,24 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
+                            <el-table-column label="是否启用路由规则" width="150" align="center">
+                                <template #default="{ row, $index }">
+                                    <el-switch
+                                        v-model="row.enable_route_rules"
+                                        :disabled="!['HTTP', 'HTTPS'].includes(row.type)"
+                                        @change="handleRouteRuleToggle($index)"
+                                        active-text="是"
+                                        inactive-text="否"
+                                    />
+                                </template>
+                            </el-table-column>
                             <el-table-column label="路由规则" width="180">
                                 <template #default="{ row, $index }">
                                     <el-button
                                         v-if="['HTTP', 'HTTPS'].includes(row.type)"
                                         type="primary"
                                         link
+                                        :disabled="!row.enable_route_rules"
                                         @click="openRouteDialog($index)"
                                     >
                                         📁 配置路由（{{ (row.routes && row.routes.length) || 0 }}）
@@ -134,18 +146,27 @@
                             <el-table-column label="穿透外网地址">
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
-                                        <a v-if="row.type=='HTTP'||row.type=='HTTPS'"
+                                        <a v-if="(row.type=='HTTP'||row.type=='HTTPS')&&row.enable"
                                                 :href="(row.type.toLowerCase()+'://') + configData.remoteHost + ':' + row.remote_port"
                                                 target="_blank"
                                                 style="color: #409eff; text-decoration: underline;"
                                         >
                                             {{row.type.toLowerCase()+'://'}}{{configData.remoteHost+':'+row.remote_port}}
                                         </a>
-                                        <div v-if="row.type!='HTTP'&&row.type!='HTTPS'"
+                                        <div v-if="(row.type!='HTTP'&&row.type!='HTTPS')&&row.enable"
                                         >
                                             {{configData.remoteHost+':'+row.remote_port}}
                                         </div>
                                     </span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="启用状态" width="150" align="center">
+                                <template #default="{ row }">
+                                    <el-switch
+                                        v-model="row.enable"
+                                        active-text="启用"
+                                        inactive-text="停用"
+                                    />
                                 </template>
                             </el-table-column>
                             <el-table-column label="操作" width="100">
@@ -265,7 +286,9 @@
           type: 'HTTP',
           remote_port: null,
           proxy_pass: '',
-          routes: []
+          enable_route_rules: false,
+          routes: [],
+          enable: true
         }
       ]
     });
@@ -311,6 +334,52 @@
         routeDialogVisible.value = false;
     }
 
+    // 处理穿透类型变化
+    function handleTypeChange(index) {
+        const row = configData.remote_proxies[index];
+        // 非HTTP/HTTPS类型时，禁用路由规则
+        if (!['HTTP', 'HTTPS'].includes(row.type)) {
+            row.enable_route_rules = false;
+        }
+    }
+
+    // 处理路由规则开关变化
+    function handleRouteRuleToggle(index) {
+        const row = configData.remote_proxies[index];
+        // 启用路由规则时，清空本地服务地址
+        if (row.enable_route_rules) {
+            row.proxy_pass = '';
+        }else{
+            row.routes = [];
+        }
+    }
+
+    // 判断本地服务地址是否禁用
+    function isProxyPassDisabled(row) {
+        // 代理类型始终禁用
+        const proxyTypes = ['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'];
+        if (proxyTypes.includes(row.type)) {
+            return true;
+        }
+        // HTTP/HTTPS类型且启用了路由规则时禁用
+        if (['HTTP', 'HTTPS'].includes(row.type) && row.enable_route_rules) {
+            return true;
+        }
+        return false;
+    }
+
+    // 获取本地服务地址占位符
+    function getProxyPassPlaceholder(row) {
+        const proxyTypes = ['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'];
+        if (proxyTypes.includes(row.type)) {
+            return '该代理类型无需填写';
+        }
+        if (['HTTP', 'HTTPS'].includes(row.type) && row.enable_route_rules) {
+            return '启用路由规则后无需填写';
+        }
+        return '请输入服务地址';
+    }
+
     // 添加表单校验规则
     const rules = {
         name: [
@@ -333,6 +402,7 @@
         // 获取当前行的索引
         const index = parseInt(rule.field.match(/\[(\d+)\]/)[1]);
         const currentType = configData.remote_proxies[index].type;
+        const enableRouteRules = configData.remote_proxies[index].enable_route_rules;
 
         // 如果是代理类型，则proxy_pass可以为空
         const proxyTypes = ['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'];
@@ -340,7 +410,12 @@
             return callback(); // 代理类型不需要校验proxy_pass
         }
 
-        // 非代理类型必须填写proxy_pass
+        // 如果是HTTP/HTTPS类型且启用了路由规则，则proxy_pass可以为空
+        if (['HTTP', 'HTTPS'].includes(currentType) && enableRouteRules) {
+            return callback(); // 启用路由规则时不需要校验proxy_pass
+        }
+
+        // 非代理类型且未启用路由规则必须填写proxy_pass
         if (!value) {
             return callback(new Error('请输入服务地址'));
         }
@@ -439,7 +514,9 @@
         type: 'HTTP',
         remote_port: null,
         proxy_pass: '',
-        routes: []
+        routes: [],
+        enable_route_rules: false,
+        enable: true
       });
       
       // 使用 nextTick 等待 DOM 更新后滚动到底部
@@ -488,6 +565,16 @@
                     ElMessage({
                         type: 'error',
                         message: portValidationResult.message,
+                    });
+                    return false;
+                }
+
+                // 校验路由规则配置
+                const routeValidationResult = validateRouteRules();
+                if (!routeValidationResult.valid) {
+                    ElMessage({
+                        type: 'error',
+                        message: routeValidationResult.message,
                     });
                     return false;
                 }
@@ -558,6 +645,23 @@
                     valid: false,
                     message: `穿透端口 ${port} 重复，请为每条配置设置不同的端口`
                 };
+            }
+        }
+        return { valid: true, message: '' };
+    }
+
+    // 校验路由规则配置
+    function validateRouteRules() {
+        for (let i = 0; i < configData.remote_proxies.length; i++) {
+            const proxy = configData.remote_proxies[i];
+            // 如果是HTTP/HTTPS类型且启用了路由规则，必须有至少一条路由规则
+            if (['HTTP', 'HTTPS'].includes(proxy.type) && proxy.enable_route_rules) {
+                if (!proxy.routes || proxy.routes.length === 0) {
+                    return {
+                        valid: false,
+                        message: `第${i + 1}条配置（${proxy.name || '未命名'}）启用了路由规则，请至少添加一条路由规则`
+                    };
+                }
             }
         }
         return { valid: true, message: '' };
