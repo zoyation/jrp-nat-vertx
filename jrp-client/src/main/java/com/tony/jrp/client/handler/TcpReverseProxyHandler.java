@@ -146,11 +146,15 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
     private static void sendTcpData(ClientProxy clientProxy, Buffer data, NetSocket netSocket) {
         String dataStr = data.toString();
         if (isHttpRequest(dataStr)) {
+            String host = clientProxy.getHost();
+            Integer port = clientProxy.getPort();
             // 剥离location路径前缀（仅当传入的是RouteRule时）
             String location = null;
             if (clientProxy instanceof RouteRule) {
-                location = ((RouteRule) clientProxy).getLocation();
+                RouteRule routeRule = (RouteRule) clientProxy;
+                location = routeRule.getLocation();
             }
+            String proxyPass = clientProxy.isHttps() ? "https://" + host + ":" + port : "http://" + host + ":" + port;
             // 获取proxy_pass中的路径前缀
             String proxyPath = clientProxy.getPath();
             if (proxyPath == null) {
@@ -163,8 +167,12 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                 dataStr = prependPath(dataStr, proxyPath);
             }
             //替换Host和Referer值，避免被内网服务器拦截
-            // 替换 Host 值
-            dataStr = dataStr.replaceFirst("(?m)^Host: .*", "Host: " + clientProxy.getHost() + ":" + clientProxy.getPort());
+            //替换Host值
+            dataStr = dataStr.replaceFirst("(?m)^Host: .*", "Host: " + host + ":" + port);
+            //替换Origin值
+            dataStr = dataStr.replaceFirst("(?m)^Origin: .*", "Origin: " + proxyPass);
+            //替换Referer值
+            dataStr = dataStr.replaceFirst("(?m)^Referer:\\s*https?://[^\\s/]+(.*)", "Referer: " + proxyPass + "$1");
             // 替换 Referer 值，保持协议一致性
             if (dataStr.contains("Referer:")) {
                 //获取Referer值
@@ -206,8 +214,8 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
      * 类似nginx的proxy_pass行为：
      * location=/api, proxy_pass路径=/backend: /api/users -> /backend/users
      *
-     * @param dataStr  请求数据
-     * @param location location路径前缀
+     * @param dataStr   请求数据
+     * @param location  location路径前缀
      * @param proxyPath proxy_pass中的路径前缀
      * @return 重写后的请求数据
      */
