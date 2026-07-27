@@ -129,6 +129,16 @@
                                     />
                                 </template>
                             </el-table-column>
+                            <el-table-column label="是否启用P2P" width="130" align="center">
+                                <template #default="{ row, $index }">
+                                    <el-switch
+                                        v-model="row.enable_p2p"
+                                        :disabled="!['HTTP', 'HTTPS', 'TCP', 'UDP'].includes(row.type)"
+                                        active-text="是"
+                                        inactive-text="否"
+                                    />
+                                </template>
+                            </el-table-column>
                             <el-table-column label="路由规则" width="180">
                                 <template #default="{ row, $index }">
                                     <el-button
@@ -287,6 +297,7 @@
           remote_port: null,
           proxy_pass: '',
           enable_route_rules: false,
+          enable_p2p: false,
           routes: [],
           enable: true
         }
@@ -516,6 +527,7 @@
         proxy_pass: '',
         routes: [],
         enable_route_rules: false,
+        enable_p2p: false,
         enable: true
       });
       

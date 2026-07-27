@@ -66,4 +66,12 @@ public class JRPServerProperties {
      * 允许缓存的最大请求数
      */
     private Integer maxRequest = Integer.MAX_VALUE;
+    /**
+     * P2P打洞端口，用于协助NAT打洞
+     */
+    private Integer p2pPort = 3000;
+    /**
+     * P2P打洞超时时间，单位秒
+     */
+    private Integer p2pTimeout = 30;
 }

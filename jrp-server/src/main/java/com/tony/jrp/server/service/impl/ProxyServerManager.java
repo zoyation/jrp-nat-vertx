@@ -4,6 +4,7 @@ import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
 import com.tony.jrp.server.config.JRPServerProperties;
+import com.tony.jrp.server.manager.P2PSessionManager;
 import com.tony.jrp.server.model.RegisterInfo;
 import com.tony.jrp.server.service.IRegisterService;
 import com.tony.jrp.server.service.ITraversalService;
@@ -20,6 +21,7 @@ import io.vertx.ext.web.Router;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -71,10 +73,24 @@ public class ProxyServerManager implements InitializingBean {
      */
     protected final Map<String, RegisterInfo> registerMap = new ConcurrentHashMap<>();
 
+    /**
+     * P2P会话管理器
+     */
+    protected P2PSessionManager p2pSessionManager;
+
+    /**
+     * 暴露P2P会话管理器为Spring Bean，供TraversalServiceImpl注入
+     */
+    @Bean
+    public P2PSessionManager p2pSessionManager() {
+        return this.p2pSessionManager;
+    }
+
     @Override
     public void afterPropertiesSet() {
         this.startServer();
         this.startRegisterListener();
+        this.startP2PServer();
     }
 
     /**
@@ -248,5 +264,21 @@ public class ProxyServerManager implements InitializingBean {
             }
         }
         return serverOptions;
+    }
+
+    /**
+     * 初始化P2P会话管理器
+     * P2P打洞UDP监听不再使用全局端口，而是按每个启用P2P的穿透配置的remote_port动态部署
+     * remote_port同时承载TCP转发和UDP打洞（协议不同可共存同一端口）
+     */
+    private void startP2PServer() {
+        try {
+            // 初始化P2P会话管理器
+            p2pSessionManager = new P2PSessionManager(properties.getP2pTimeout());
+            log.info("P2P会话管理器已初始化，超时时间: {}秒", properties.getP2pTimeout());
+            log.info("P2P打洞UDP监听将在收到客户端注册时按remote_port动态部署");
+        } catch (Exception e) {
+            log.error("初始化P2P会话管理器异常", e);
+        }
     }
 }

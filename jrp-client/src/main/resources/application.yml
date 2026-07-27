@@ -14,6 +14,16 @@ vertx:
     username: client
     #穿透成功后，访问时的认证密码，如果没配置会使用服务端里面配置的认证信息
     password: 10086
+    #P2P打洞端口，用于NAT打洞，默认3000
+    p2p-port: 3000
+    #用户模式启动，启用后用户访问127.0.0.1:本地端口通过P2P隧道直连，默认false
+    user-mode: false
+    #用户模式本地端口起始范围，默认5000
+    user-mode-port-start: 5000
+    #用户模式本地端口结束范围，默认6000
+    user-mode-port-end: 6000
+    #P2P连接重试次数，默认3
+    p2p-reconnect-times: 3
     #redis配置，默认file类型，无需配置
     redis:
       # 单机-STANDALONE,哨兵-SENTINEL,集群-CLUSTER,主从-REPLICATION

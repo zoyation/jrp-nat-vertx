@@ -1,6 +1,7 @@
 package com.tony.jrp.client;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.tony.jrp.client.config.ProxyClientProperties;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Launcher;
 import io.vertx.core.Promise;
@@ -9,6 +10,7 @@ import io.vertx.core.json.jackson.DatabindCodec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
 
 import java.nio.charset.Charset;
 import java.util.Arrays;
@@ -105,8 +107,34 @@ public class ClientApplication extends AbstractVerticle {
         log.info("set file.encoding to UTF-8");
         //禁用自带dns
         System.setProperty("vertx.disableDnsResolver", "true");
+
+        // 任务11: 读取userMode配置，选择启动模式
+        log.info("========================================");
+        log.info("JRP-NAT 客户端启动中...");
+        log.info("========================================");
+
         vertx.executeBlocking(() -> {
-            SpringApplication.run(ClientApplication.class, processArgs().toArray(new String[]{}));
+            ConfigurableApplicationContext context = SpringApplication.run(ClientApplication.class, processArgs().toArray(new String[]{}));
+
+            // 任务11.1-11.4: 读取userMode配置，输出启动模式日志
+            ProxyClientProperties props = context.getBean(ProxyClientProperties.class);
+            if (Boolean.TRUE.equals(props.getUserMode())) {
+                log.info("========================================");
+                log.info("启动模式: 用户模式 (P2P直连)");
+                log.info("P2P打洞端口: {}", props.getP2pPort());
+                log.info("本地端口范围: {}-{}", props.getUserModePortStart(), props.getUserModePortEnd());
+                log.info("P2P重连次数: {}", props.getP2pReconnectTimes());
+                log.info("说明: 用户访问 [127.0.0.1:本地端口] 通过P2P隧道直连内网服务");
+                log.info("      打洞失败时将自动回退到服务器中转模式");
+                log.info("========================================");
+            } else {
+                log.info("========================================");
+                log.info("启动模式: 传统模式 (服务器中转)");
+                log.info("说明: 用户通过服务器外网端口访问内网服务");
+                log.info("      如需启用P2P直连，请设置 vertx.jrp.user-mode=true");
+                log.info("========================================");
+            }
+
             startPromise.complete();
             return true;
         });

@@ -4,6 +4,7 @@ import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
+import com.tony.jrp.server.manager.P2PSessionManager;
 import com.tony.jrp.server.service.impl.SecurityService;
 import com.tony.jrp.server.util.TraversalUtil;
 import io.vertx.core.AbstractVerticle;
@@ -52,6 +53,10 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      */
     private final SecurityService securityService;
     /**
+     * P2P会话管理器（全局共享，用于创建P2P打洞监听）
+     */
+    private final P2PSessionManager p2pSessionManager;
+    /**
      * 客户端注册信息
      */
     @Getter
@@ -64,6 +69,10 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      */
     private final Map<Integer, AbstractProtocolVerticle<?>> verticleMap = new ConcurrentHashMap<>();
     /**
+     * P2P打洞Verticle部署ID映射：remotePort -> deploymentId
+     */
+    private final Map<Integer, String> p2pVerticleMap = new ConcurrentHashMap<>();
+    /**
      * 外网IPv4地址
      */
     private String ipv4;
@@ -75,11 +84,14 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      * @param clientRegister  客户端注册信息
      * @param serverSocket    服务器socket
      * @param securityService 安全认证服务
+     * @param p2pSessionManager P2P会话管理器
      */
-    public RegisterTraversalVerticle(ClientRegister clientRegister, ServerWebSocket serverSocket, SecurityService securityService) {
+    public RegisterTraversalVerticle(ClientRegister clientRegister, ServerWebSocket serverSocket,
+                                     SecurityService securityService, P2PSessionManager p2pSessionManager) {
         this.clientRegister = clientRegister;
         this.serverSocket = serverSocket;
         this.securityService = securityService;
+        this.p2pSessionManager = p2pSessionManager;
     }
 
     @Override
@@ -179,6 +191,12 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
             vertx.deployVerticle(verticle)
                     .onSuccess(id -> verticleMap.put(remotePort, verticle))
                     .onFailure(Throwable::printStackTrace);
+
+            // 如果代理启用了P2P，同时在该remote_port上部署P2P打洞UDP监听
+            // remote_port同时支持TCP转发和UDP打洞（协议不同，可共存同一端口号）
+            if (clientProxy.isEnable_p2p()) {
+                deployP2PVerticle(clientProxy);
+            }
         }
     }
 
@@ -213,6 +231,8 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                                 .onSuccess(v -> log.info("已移除端口[{}]的代理verticle", remotePort))
                                 .onFailure(t -> log.error("移除端口[{}]的代理verticle失败", remotePort, t));
                     }
+                    // 同时移除对应端口的P2P打洞Verticle
+                    undeployP2PVerticle(remotePort);
                 });
         // 2. 处理新增或更新的代理
         for (ClientProxy newProxy : proxies) {
@@ -240,6 +260,17 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                     // 配置未变化，但需要更新clientRegister引用
                     existingVerticle.setClientRegister(newClientRegister);
                     log.debug("端口[{}]的代理配置未变化，仅更新clientRegister引用", remotePort);
+
+                    // 处理P2P启用状态变更
+                    boolean wasP2P = oldProxy.isEnable_p2p();
+                    boolean nowP2P = newProxy.isEnable_p2p();
+                    if (!wasP2P && nowP2P) {
+                        log.info("端口[{}]的代理启用P2P，部署P2P打洞Verticle", remotePort);
+                        deployP2PVerticle(newProxy);
+                    } else if (wasP2P && !nowP2P) {
+                        log.info("端口[{}]的代理禁用P2P，移除P2P打洞Verticle", remotePort);
+                        undeployP2PVerticle(remotePort);
+                    }
                 }
             }
         }
@@ -282,6 +313,11 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
 
         // 比较type
         if (oldProxy.getType() != newProxy.getType()) {
+            return true;
+        }
+
+        // 比较P2P启用状态
+        if (oldProxy.isEnable_p2p() != newProxy.isEnable_p2p()) {
             return true;
         }
 
@@ -330,20 +366,61 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                     log.info("成功部署端口[{}]的代理verticle，类型：{}", remotePort, clientProxy.getType());
                 })
                 .onFailure(t -> log.error("部署端口[{}]的代理verticle失败", remotePort, t));
+
+        // 如果代理启用了P2P，同时在该remote_port上部署P2P打洞UDP监听
+        if (clientProxy.isEnable_p2p()) {
+            deployP2PVerticle(clientProxy);
+        }
+    }
+
+    /**
+     * 部署P2P打洞Verticle到指定remote_port
+     * remote_port同时承载TCP转发和UDP打洞（协议不同可共存）
+     */
+    private void deployP2PVerticle(ClientProxy clientProxy) {
+        Integer remotePort = clientProxy.getRemote_port();
+        // 避免重复部署
+        if (p2pVerticleMap.containsKey(remotePort)) {
+            log.debug("端口[{}]的P2P打洞Verticle已存在，跳过部署", remotePort);
+            return;
+        }
+        P2PServerVerticle p2pVerticle = new P2PServerVerticle(remotePort, p2pSessionManager);
+        vertx.deployVerticle(p2pVerticle)
+                .onSuccess(id -> {
+                    p2pVerticleMap.put(remotePort, id);
+                    log.info("成功部署端口[{}]的P2P打洞Verticle (UDP)", remotePort);
+                })
+                .onFailure(t -> log.error("部署端口[{}]的P2P打洞Verticle失败", remotePort, t));
+    }
+
+    /**
+     * 移除指定端口的P2P打洞Verticle
+     */
+    private void undeployP2PVerticle(Integer remotePort) {
+        String deploymentId = p2pVerticleMap.remove(remotePort);
+        if (deploymentId != null) {
+            vertx.undeploy(deploymentId)
+                    .onSuccess(v -> log.info("已移除端口[{}]的P2P打洞Verticle", remotePort))
+                    .onFailure(t -> log.warn("移除端口[{}]的P2P打洞Verticle失败", remotePort, t));
+        }
     }
 
     @Override
     public void stop() {
         String ports = verticleMap.keySet().stream().map(Object::toString).collect(Collectors.joining(","));
         log.info("清理端口[{}]下所有代理缓存！", ports);
-        //vertx会自动销毁当前的verticle里创建的verticle
-//        verticleMap.values().forEach((v) ->
-//                vertx.undeploy(v.deploymentID())
-//                        .onSuccess(success -> log.info("移除端口[{}]的代理verticle成功", v.getClientProxy().getRemote_port()))
-//                        .onFailure(t ->
-//                                log.error("移除端口[{}]的代理verticle失败", v.getClientProxy().getRemote_port(), t)
-//                        )
-//        );
         verticleMap.clear();
+
+        // 清理P2P打洞Verticle
+        for (Map.Entry<Integer, String> entry : p2pVerticleMap.entrySet()) {
+            vertx.undeploy(entry.getValue(), result -> {
+                if (result.succeeded()) {
+                    log.info("已移除端口[{}]的P2P打洞Verticle", entry.getKey());
+                } else {
+                    log.warn("移除端口[{}]的P2P打洞Verticle失败", entry.getKey(), result.cause());
+                }
+            });
+        }
+        p2pVerticleMap.clear();
     }
 }

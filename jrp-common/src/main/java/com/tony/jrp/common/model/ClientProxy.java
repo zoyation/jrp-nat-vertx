@@ -49,6 +49,10 @@ public class ClientProxy implements Serializable {
      */
     private Integer remote_port;
     /**
+     * 是否启用p2p穿透，默认不启用。
+     */
+    private boolean enable_p2p = false;
+    /**
      * 是否启用路由规则，仅HTTP/HTTPS类型有效。
      * 启用后可通过routes配置多条路由规则，按路径前缀转发到不同本地服务。
      * 启用路由规则时，不能设置proxy_pass（本地服务地址）。
