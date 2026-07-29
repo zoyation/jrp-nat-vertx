@@ -37,4 +37,8 @@ public class ClientRegister {
      * 客户端穿透配置列表
      */
     private List<ClientProxy> proxies;
+    /**
+     * 用户端p2p访问信息，用于直连穿透。
+     */
+    private List<UserProxy> userProxies;
 }

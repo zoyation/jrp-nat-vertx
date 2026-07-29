@@ -39,22 +39,6 @@ public class ProxyClientProperties {
      */
     private String password;
     /**
-     * P2P打洞端口，用于NAT打洞
-     */
-    private Integer p2pPort = 3000;
-    /**
-     * 用户模式启动，启用后用户访问127.0.0.1:本地端口通过P2P隧道直连
-     */
-    private Boolean userMode = Boolean.FALSE;
-    /**
-     * 用户模式本地端口起始范围
-     */
-    private Integer userModePortStart = 5000;
-    /**
-     * 用户模式本地端口结束范围
-     */
-    private Integer userModePortEnd = 6000;
-    /**
      * P2P连接重试次数
      */
     private Integer p2pReconnectTimes = 3;

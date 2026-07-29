@@ -14,6 +14,7 @@ import java.util.Arrays;
  * CLOSE： 关闭
  * PROXIES_UPDATE： 更新代理
  * PROXIES_UPDATE_RESULT： 更新代理结果
+ * USER_TUNNEL: 用户打洞通知
  */
 @Getter
 public enum JRPMsgType implements Serializable {
@@ -23,7 +24,8 @@ public enum JRPMsgType implements Serializable {
     RESPONSE((byte) 0X03),
     CLOSE((byte) 0X04),
     PROXIES_UPDATE((byte) 0X05),
-    PROXIES_UPDATE_RESULT((byte) 0X06);
+    PROXIES_UPDATE_RESULT((byte) 0X06),
+    USER_TUNNEL((byte) 0X07);
     private final byte code;
     private final byte[] codeArray;
     public static final int TYPE_LEN = 1;

@@ -36,6 +36,7 @@ public interface IConfigService {
             "      \"remote_port\": 1080\n" +
             "    }\n" +
             "  ]\n" +
+            "  \"user_proxies\":[]\n" +
             "}";
 
     ConfigStoreOptions getConfigStore();
@@ -53,6 +54,7 @@ public interface IConfigService {
      * @param ctx 上下文
      */
     void save(RoutingContext ctx);
+
     /**
      * 保存配置信息
      *
@@ -60,6 +62,7 @@ public interface IConfigService {
      * @return 配置信息
      */
     public int save(List<ClientProxy> list);
+
     /**
      * 结束
      *

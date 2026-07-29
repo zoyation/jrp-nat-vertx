@@ -1,8 +1,8 @@
-package com.tony.jrp.client.service;
+package com.tony.jrp.client.service.impl;
 
 import com.tony.jrp.client.server.LocalProxyServer;
 import com.tony.jrp.client.tunnel.P2PTunnel;
-import com.tony.jrp.common.model.ClientProxy;
+import com.tony.jrp.common.model.UserProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramPacket;
@@ -11,8 +11,6 @@ import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.json.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -30,13 +28,7 @@ public class P2PClientManager {
     private final String proxyId;
     private final String serverP2pAddress;
     private final Vertx vertx;
-    private final ClientProxy clientProxy;
-
-    /**
-     * 本地服务信息（原始服务地址）
-     */
-    private final String localIp;
-    private final int localPort;
+    private final UserProxy userProxy;
 
     /**
      * 本地监听端口（P2P连接成功后，在此端口监听用户请求）
@@ -117,27 +109,16 @@ public class P2PClientManager {
 
     private final P2PCallback callback;
 
-    public P2PClientManager(String clientId, ClientProxy clientProxy, String serverP2pAddress,
+    public P2PClientManager(String clientId, UserProxy userProxy,String serverP2pAddress,
                             Vertx vertx, int maxReconnectTimes, int localAccessPort, P2PCallback callback) {
         this.clientId = clientId;
-        this.proxyId = clientProxy.getId();
+        this.proxyId = userProxy.getId();
         this.serverP2pAddress = serverP2pAddress;
         this.vertx = vertx;
-        this.clientProxy = clientProxy;
+        this.userProxy = userProxy;
         this.maxReconnectTimes = maxReconnectTimes;
         this.localAccessPort = localAccessPort;
         this.callback = callback;
-
-        // 解析本地服务地址（原始服务地址，打洞成功后数据将转发到此地址）
-        String proxyPass = clientProxy.getProxy_pass();
-        if (proxyPass == null || !proxyPass.contains(":")) {
-            throw new IllegalArgumentException("proxy_pass格式错误，应为 host:port: " + proxyPass);
-        }
-        // 去掉协议前缀（如 http://）
-        String cleanPass = proxyPass.replaceAll("^https?://", "");
-        String[] localParts = cleanPass.split(":");
-        this.localIp = localParts[0];
-        this.localPort = Integer.parseInt(localParts[1]);
     }
 
     /**
@@ -222,9 +203,7 @@ public class P2PClientManager {
             JsonObject registerJson = new JsonObject()
                     .put("type", "p2p_register")
                     .put("client_id", clientId)
-                    .put("proxy_id", proxyId)
-                    .put("local_ip", localIp)
-                    .put("local_port", localPort);
+                    .put("proxy_id", proxyId);
 
             Buffer buffer = Buffer.buffer()
                     .appendByte((byte) 0x01) // REGISTER消息类型
@@ -499,8 +478,8 @@ public class P2PClientManager {
             localProxyServer = new LocalProxyServer(localAccessPort, proxyId, vertx, p2pTunnel);
             localProxyServer.start();
 
-            log.info("本地代理服务器已启动: proxyId={}, localPort={}, targetService={}:{}",
-                    proxyId, localAccessPort, localIp, localPort);
+            log.info("本地代理服务器已启动: proxyId={}, localPort={}",
+                    proxyId, localAccessPort);
 
         } catch (Exception e) {
             log.error("启动本地代理服务器失败: proxyId={}", proxyId, e);
