@@ -5,7 +5,6 @@ import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.RouteRule;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.WebSocket;
 import io.vertx.core.net.NetClient;
 import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetSocket;
@@ -15,6 +14,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -71,7 +71,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
+    public void receiveMsgAndProxy(Consumer<Buffer> bufferConsumer, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
         String proxyPass = clientProxy.getProxy_pass();
         int originPort = clientProxy.getPort();
         String originHost = clientProxy.getHost();
@@ -97,15 +97,15 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                                 netSocketMap.put(clientId, proxySocket);
                                 proxySocket.exceptionHandler(e -> log.debug("代理转发服务异常：{}", e.getMessage(), e));
                                 proxySocket.closeHandler(ch -> {
-                                    if (webSocket != null && netSocketMap.remove(clientId) != null) {
+                                    if (bufferConsumer != null && netSocketMap.remove(clientId) != null) {
                                         log.debug("客户端[{}]对应的内容请求关闭！", clientId);
-                                        webSocket.write(closeBuffer(msgId));
+                                        bufferConsumer.accept(closeBuffer(msgId));
                                     }
                                 });
                                 proxySocket.handler(response -> {
-                                    if (webSocket != null && netSocketMap.get(clientId) != null) {
+                                    if (bufferConsumer != null && netSocketMap.get(clientId) != null) {
                                         log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
-                                        webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + response.length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(response));
+                                        bufferConsumer.accept(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + response.length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(response));
                                     } else {
                                         log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
                                     }
@@ -120,7 +120,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                             }
                         } catch (Exception e) {
                             log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                            webSocket.write(closeBuffer(msgId));
+                            bufferConsumer.accept(closeBuffer(msgId));
                         } finally {
                             downLatch.countDown();
                         }
@@ -129,7 +129,7 @@ public class TcpReverseProxyHandler extends AbstractProxyHandler {
                         downLatch.await();
                     } catch (InterruptedException e) {
                         log.error("转发服务连接处理异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                        webSocket.write(closeBuffer(msgId));
+                        bufferConsumer.accept(closeBuffer(msgId));
                     }
                 }
             }

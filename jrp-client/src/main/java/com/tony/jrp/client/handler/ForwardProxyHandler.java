@@ -7,7 +7,6 @@ import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramSocket;
 import io.vertx.core.datagram.DatagramSocketOptions;
-import io.vertx.core.http.WebSocket;
 import io.vertx.core.net.NetClient;
 import io.vertx.core.net.NetClientOptions;
 import io.vertx.core.net.NetSocket;
@@ -19,6 +18,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.Consumer;
 
 import static com.tony.jrp.common.utils.JRPConstants.IP_PORT_SEPARATOR;
 
@@ -31,12 +31,12 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
      * 代理请求对象缓存
      */
     private final Map<Integer, ReadStream<?>> socketMap = new ConcurrentHashMap<>();
-    
+
     /**
      * 复用的TCP客户端实例（线程安全，可并发使用）
      */
     private volatile NetClient tcpClient;
-    
+
     /**
      * TCP客户端初始化锁
      */
@@ -45,11 +45,11 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
     public ForwardProxyHandler(Vertx vertx) {
         super(vertx);
     }
-    
+
     /**
      * 获取或创建复用的TCP客户端
      * 使用双重检查锁定确保线程安全
-     * 
+     *
      * @return NetClient实例
      */
     private NetClient getOrCreateTcpClient() {
@@ -73,7 +73,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                     clientOptions.setTcpNoDelay(true);
                     // 快速打开TCP连接（如果系统支持）
                     clientOptions.setTcpFastOpen(true);
-                    
+
                     tcpClient = vertx.createNetClient(clientOptions);
                     log.info("复用TCP客户端初始化完成");
                 }
@@ -101,7 +101,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
+    public void receiveMsgAndProxy(Consumer<Buffer> bufferConsumer, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
         ReadStream<?> socket = socketMap.get(clientId);
         if (socket != null) {
             sendData(data, socket);
@@ -116,7 +116,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                     if (protocol == null) {
                         log.warn("代理请求数据格式错误或连接已经关闭！");
                         log.debug("关闭客户端[{}]对应的内容！", clientId);
-                        webSocket.write(closeBuffer(msgId));
+                        bufferConsumer.accept(closeBuffer(msgId));
                         return;
                     }
 
@@ -130,7 +130,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         // IPv4地址 (4字节)
                         if (data.length() < offset + 4) {
                             log.warn("IPv4地址数据长度不足");
-                            webSocket.write(closeBuffer(msgId));
+                            bufferConsumer.accept(closeBuffer(msgId));
                             return;
                         }
                         StringBuilder ipBuilder = new StringBuilder();
@@ -144,7 +144,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         // IPv6地址 (16字节)
                         if (data.length() < offset + 16) {
                             log.warn("IPv6地址数据长度不足");
-                            webSocket.write(closeBuffer(msgId));
+                            bufferConsumer.accept(closeBuffer(msgId));
                             return;
                         }
                         byte[] ipv6Bytes = data.getBytes(offset, offset + 16);
@@ -153,7 +153,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                             targetHost = inetAddress.getHostAddress();
                         } catch (Exception e) {
                             log.error("解析IPv6地址失败: {}", e.getMessage(), e);
-                            webSocket.write(closeBuffer(msgId));
+                            bufferConsumer.accept(closeBuffer(msgId));
                             return;
                         }
                         offset += 16;
@@ -169,20 +169,20 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         }
                         if (separatorPos == -1) {
                             log.warn("未找到域名分隔符");
-                            webSocket.write(closeBuffer(msgId));
+                            bufferConsumer.accept(closeBuffer(msgId));
                             return;
                         }
                         targetHost = data.getString(offset, separatorPos);
                         offset = separatorPos;
                     } else {
                         log.warn("不支持的地址类型: {}", addrType);
-                        webSocket.write(closeBuffer(msgId));
+                        bufferConsumer.accept(closeBuffer(msgId));
                         return;
                     }
 
                     if (!StringUtils.hasText(targetHost)) {
                         log.warn("不能解析目标host,关闭客户端[{}]对应的内容!", clientId);
-                        webSocket.write(closeBuffer(msgId));
+                        bufferConsumer.accept(closeBuffer(msgId));
                         return;
                     }
 
@@ -193,7 +193,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         targetPort = data.getBuffer(offset, offset + 2).getUnsignedShort(0);
                     } catch (Exception e) {
                         log.warn("不能解析目标端口,关闭客户端[{}]对应的内容!", clientId);
-                        webSocket.write(closeBuffer(msgId));
+                        bufferConsumer.accept(closeBuffer(msgId));
                         return;
                     }
 
@@ -217,7 +217,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         netClient.handler(packet -> {
                             log.debug("udp原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
                             //Integer remotePort = proxy.getRemote_port();
-                            webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + packet.data().length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(packet.data()));
+                            bufferConsumer.accept(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + packet.data().length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(packet.data()));
                         });
                         netClient.send(data, targetPort, targetHost, rs -> {
                             if (rs.succeeded()) {
@@ -252,22 +252,22 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                                     clientId, errorMsg, targetHost, targetPort, e);
                                         }
                                         // 清理资源并通知服务端
-                                        if (socketMap.remove(clientId) != null && webSocket != null) {
-                                            webSocket.write(closeBuffer(msgId));
+                                        if (socketMap.remove(clientId) != null && bufferConsumer != null) {
+                                            bufferConsumer.accept(closeBuffer(msgId));
                                         }
                                     });
                                     proxySocket.closeHandler(ch -> {
-                                        if (webSocket != null && socketMap.remove(clientId) != null) {
+                                        if (bufferConsumer != null && socketMap.remove(clientId) != null) {
                                             log.debug("客户端[{}]对应的内容请求关闭！", clientId);
-                                            webSocket.write(closeBuffer(msgId));
+                                            bufferConsumer.accept(closeBuffer(msgId));
                                         }
                                     });
                                     // 返回给服务端代表连接成功
-                                    if (webSocket != null) {
+                                    if (bufferConsumer != null) {
                                         proxySocket.handler(response -> {
                                             if (socketMap.get(clientId) != null) {
                                                 log.debug("已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
-                                                webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + response.length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(response));
+                                                bufferConsumer.accept(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + response.length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(response));
                                             } else {
                                                 log.warn("和服务器断开连接，不返回请求给客户端[{}]！", clientId);
                                             }
@@ -280,34 +280,34 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                         } else {
                                             //非http请求，返回给代理服务端代表连接成功
                                             log.debug("非http请求[{}:{}]，返回给代理服务端代表连接成功", targetHost, targetPort);
-                                            webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
+                                            bufferConsumer.accept(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId));
                                         }
                                     }
                                 } else {
                                     Throwable cause = asyncResult.cause();
                                     String errorMsg = cause.getMessage();
-                                    
+
                                     // 详细记录连接失败原因
                                     if (errorMsg != null && errorMsg.contains("Cannot assign requested address")) {
-                                        log.error("内网代理连接失败[clientId={}]：无法分配请求的地址，目标服务[{}:{}]，地址类型:{}，可能原因：1)IPv6地址格式错误或系统不支持 2)本地端口耗尽 3)目标地址不可达", 
+                                        log.error("内网代理连接失败[clientId={}]：无法分配请求的地址，目标服务[{}:{}]，地址类型:{}，可能原因：1)IPv6地址格式错误或系统不支持 2)本地端口耗尽 3)目标地址不可达",
                                                 clientId, targetHost, targetPort, addrType, cause);
                                     } else if (errorMsg != null && errorMsg.contains("Connection refused")) {
-                                        log.warn("内网代理连接被拒绝[clientId={}]：目标服务[{}:{}]未启动或拒绝连接", 
+                                        log.warn("内网代理连接被拒绝[clientId={}]：目标服务[{}:{}]未启动或拒绝连接",
                                                 clientId, targetHost, targetPort);
                                     } else if (errorMsg != null && errorMsg.contains("timed out")) {
-                                        log.warn("内网代理连接超时[clientId={}]：目标服务[{}:{}]响应超时", 
+                                        log.warn("内网代理连接超时[clientId={}]：目标服务[{}:{}]响应超时",
                                                 clientId, targetHost, targetPort);
                                     } else if (errorMsg != null && errorMsg.contains("No route to host")) {
-                                        log.error("内网代理连接失败[clientId={}]：无路由到主机，目标服务[{}:{}]，网络不可达", 
+                                        log.error("内网代理连接失败[clientId={}]：无路由到主机，目标服务[{}:{}]，网络不可达",
                                                 clientId, targetHost, targetPort);
                                     } else {
                                         log.error("内网代理连接到{}:{}失败：{}！", targetHost, targetPort, errorMsg, cause);
                                     }
-                                    webSocket.write(closeBuffer(msgId));
+                                    bufferConsumer.accept(closeBuffer(msgId));
                                 }
                             } catch (Exception e) {
                                 log.error("初始化转发服务异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                                webSocket.write(closeBuffer(msgId));
+                                bufferConsumer.accept(closeBuffer(msgId));
                             } finally {
                                 downLatch.countDown();
                             }
@@ -317,7 +317,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                         downLatch.await();
                     } catch (InterruptedException e) {
                         log.error("转发服务连接处理异常：{}，发送关闭消息给服务端", e.getMessage(), e);
-                        webSocket.write(closeBuffer(msgId));
+                        bufferConsumer.accept(closeBuffer(msgId));
                     }
                 }
             }
@@ -421,7 +421,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
             tcpClient = null;
             log.info("复用TCP客户端已关闭");
         }
-        
+
         // 关闭所有代理连接
         if (!socketMap.isEmpty()) {
             log.info("停止代理转发服务，清理{}个连接", socketMap.size());

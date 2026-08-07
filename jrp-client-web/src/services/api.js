@@ -57,28 +57,21 @@ apiClient.interceptors.response.use(
 export default {
   // Config related
     getConfig() {
-        return apiClient.get('/config/list');
+        return apiClient.get('/config/listRemoteProxies');
     },
     saveConfig(data) {
-        return apiClient.post('/config/save', data);
+        return apiClient.post('/config/saveRemoteProxies', data);
     },
     status() {
-      return apiClient.get('/config/status');
+      return apiClient.get('/config/statusRemoteProxies');
     },
-    // Example for other endpoints
-    getResource(id) {
-        return apiClient.get(`/resources/${id}`);
+    getUserConfig() {
+        return apiClient.get('/config/listUserProxies');
     },
-
-    createResource(data) {
-        return apiClient.post('/resources', data);
+    saveUserConfig(data) {
+        return apiClient.post('/config/saveUserProxies', data);
     },
-
-    updateResource(id, data) {
-        return apiClient.put(`/resources/${id}`, data);
-    },
-
-    deleteResource(id) {
-        return apiClient.delete(`/resources/${id}`);
+    statusUser() {
+      return apiClient.get('/config/statusUserProxies');
     }
 };

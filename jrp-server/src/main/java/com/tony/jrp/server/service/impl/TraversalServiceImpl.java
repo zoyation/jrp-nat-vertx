@@ -2,7 +2,6 @@ package com.tony.jrp.server.service.impl;
 
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
-import com.tony.jrp.server.manager.P2PSessionManager;
 import com.tony.jrp.server.service.ITraversalService;
 import com.tony.jrp.server.util.TraversalUtil;
 import com.tony.jrp.server.verticle.RegisterTraversalVerticle;
@@ -37,11 +36,6 @@ public class TraversalServiceImpl implements ITraversalService {
      */
     @Autowired
     protected SecurityService securityService;
-    /**
-     * P2P会话管理器（全局共享）
-     */
-    @Autowired
-    protected P2PSessionManager p2pSessionManager;
     /**
      * 所有代理信息
      */
@@ -80,7 +74,7 @@ public class TraversalServiceImpl implements ITraversalService {
             throw new IllegalArgumentException("端口[" + String.join(",", invalidPorts) + "]已被使用，请使用" + MIN_PORT + "到" + MAX_PORT + "中其它端口，或让服务器自动分配！");
         } else {
             TraversalUtil.allocatePort(proxies);
-            RegisterTraversalVerticle traversalVerticle = new RegisterTraversalVerticle(clientRegister, webSocket, securityService, p2pSessionManager);
+            RegisterTraversalVerticle traversalVerticle = new RegisterTraversalVerticle(clientRegister, webSocket, securityService);
             verticleMap.put(webSocket.textHandlerID(), traversalVerticle);
             return vertx.deployVerticle(traversalVerticle);
         }

@@ -7,11 +7,11 @@ import com.tony.jrp.client.handler.ForwardProxyHandler;
 import com.tony.jrp.client.handler.TcpReverseProxyHandler;
 import com.tony.jrp.client.handler.UdpReverseProxyHandler;
 import com.tony.jrp.client.service.IConfigService;
-import com.tony.jrp.client.server.LocalProxyServer;
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.*;
 import com.tony.jrp.common.utils.ClientIdUtils;
+import com.tony.jrp.common.utils.PortConverter;
 import io.vertx.config.ConfigRetriever;
 import io.vertx.config.ConfigRetrieverOptions;
 import io.vertx.core.Future;
@@ -19,9 +19,13 @@ import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.datagram.DatagramPacket;
+import io.vertx.core.datagram.DatagramSocket;
+import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.*;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.handler.StaticHandler;
 import lombok.Data;
@@ -41,6 +45,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -112,13 +117,9 @@ public class ProxyClientManager implements InitializingBean {
     private final AtomicInteger reconnectionTimes = new AtomicInteger(0);
     private String errorMessage = "";
     Map<Integer, ClientProxy> remotePortClientMap = new ConcurrentHashMap<>();
+    Map<Integer, DatagramSocket> remotePortUdpSocketMap = new ConcurrentHashMap<>();
+    Map<Integer, SocketAddress> remotePortSenderMap = new ConcurrentHashMap<>();
     private final Map<ServiceType, AbstractProxyHandler> handlerMap = new ConcurrentHashMap<>();
-
-    /**
-     * P2P客户端管理器映射（proxyId -> P2PClientManager）
-     */
-    private final Map<String, P2PClientManager> p2pClientManagers = new ConcurrentHashMap<>();
-
     /**
      * HTTP请求行路径提取正则
      */
@@ -262,24 +263,43 @@ public class ProxyClientManager implements InitializingBean {
         String webAndPrefixPath = path;
         router.route(HttpMethod.GET, "/").handler(ctx -> ctx.redirect(webAndPrefixPath));
         //获取配置信息
-        router.route(HttpMethod.GET, path + "/config/list").handler(ctx -> configService.list(ctx));
+        router.route(HttpMethod.GET, path + "/config/listRemoteProxies").handler(ctx -> configService.listRemoteProxies(ctx));
         //保存配置信息
-        router.route(HttpMethod.POST, path + "/config/save").handler(ctx -> {
+        router.route(HttpMethod.POST, path + "/config/saveRemoteProxies").handler(ctx -> {
             if (this.register != null && this.register.isUpdated()) {
                 log.info("标识需要发送更新穿透配置信息");
                 this.register.setUpdated(false);
             }
-            configService.save(ctx);
+            configService.saveRemoteProxies(ctx);
         });
         //更新穿透状态
-        router.route(HttpMethod.GET, path + "/config/status").handler(ctx -> configService.end(() -> {
+        router.route(HttpMethod.GET, path + "/config/statusRemoteProxies").handler(ctx -> configService.end(() -> {
             RegisterStatus registerStatus = registerWebSocket == null ? RegisterStatus.fail(errorMessage, registerHost) : RegisterStatus.ok("穿透成功！", registerHost);
             //附加P2P状态信息
             LinkedHashMap<String, Object> statusResult = new LinkedHashMap<>();
             statusResult.put("success", registerStatus.getSuccess());
             statusResult.put("message", registerStatus.getMessage());
             statusResult.put("remoteHost", registerStatus.getRemoteHost());
-            statusResult.put("p2pStatus", getP2PStatus());
+            return Json.encode(statusResult);
+        }, ctx));
+        //p2p获取配置信息
+        router.route(HttpMethod.GET, path + "/config/listUserProxies").handler(ctx -> configService.listUserProxies(ctx));
+        //p2p保存配置信息
+        router.route(HttpMethod.POST, path + "/config/saveUserProxies").handler(ctx -> {
+            if (this.register != null && this.register.isUpdated()) {
+                log.info("标识需要发送更新p2p穿透配置信息");
+                this.register.setUpdated(false);
+            }
+            configService.saveUserProxies(ctx);
+        });
+        //p2p更新穿透状态
+        router.route(HttpMethod.GET, path + "/config/statusUserProxies").handler(ctx -> configService.end(() -> {
+            RegisterStatus registerStatus = registerWebSocket == null ? RegisterStatus.fail(errorMessage, registerHost) : RegisterStatus.ok("穿透成功！", registerHost);
+            //附加P2P状态信息
+            LinkedHashMap<String, Object> statusResult = new LinkedHashMap<>();
+            statusResult.put("success", registerStatus.getSuccess());
+            statusResult.put("message", registerStatus.getMessage());
+            statusResult.put("remoteHost", registerStatus.getRemoteHost());
             return Json.encode(statusResult);
         }, ctx));
         //其它前端页面
@@ -352,7 +372,7 @@ public class ProxyClientManager implements InitializingBean {
      */
     private void startRegister(ProxyClientConfig newConfig) {
         try {
-            if (CollectionUtils.isEmpty(newConfig.getRemote_proxies())||CollectionUtils.isEmpty(newConfig.getUser_proxies())) {
+            if (CollectionUtils.isEmpty(newConfig.getRemote_proxies()) && CollectionUtils.isEmpty(newConfig.getUser_proxies())) {
                 log.warn("没有穿透配置信息，配置穿透信息后进行注册！");
                 return;
             }
@@ -456,8 +476,6 @@ public class ProxyClientManager implements InitializingBean {
                             vertx.cancelTimer(pingTimerId);
                         }
                         this.closeProxyHandler();
-                        // 任务10: 停止所有P2P客户端
-                        this.stopAllP2P();
                     } catch (Exception e) {
                         log.error("closeWebSocket error：{}", e.getMessage(), e);
                     } finally {
@@ -474,6 +492,8 @@ public class ProxyClientManager implements InitializingBean {
                     //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为{
                     byte msgType = buffer.getByte(0);
                     JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
+                    //代理端口
+                    Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_LEN).getUnsignedShort(0);
                     if (jrpMsgType == null) {
                         log.error("未知消息类型：{}", buffer);
                         webSocket.close();
@@ -484,8 +504,18 @@ public class ProxyClientManager implements InitializingBean {
                             try {
                                 RegisterResult registerResult = Json.decodeValue(buffer.getBuffer(1, buffer.length()), RegisterResult.class);
                                 if (registerResult.isSuccess()) {
+                                    //初始化端口转发穿透服务处理器
                                     this.closeAndCreateProxyHandler();
-                                    register.setUpdated(false);
+                                    try {
+                                        //初始化支持P2P穿透的内网穿透，用于管理P2P客户端连接
+                                        this.initClientP2P(register.getProxies().stream().filter(r -> r.isEnable() && r.isEnable_p2p()).collect(Collectors.toList()));
+                                        this.initUserP2P(register.getUserProxies().stream().filter(UserProxy::isEnable).collect(Collectors.toList()));
+                                    } catch (Exception e) {
+                                        log.error("P2P初始化异常（不影响中转模式）: {}", e.getMessage(), e);
+                                    }
+                                    //设置状态为更新状态
+                                    register.setUpdated(true);
+                                    //更新代理信息
                                     updateProxies(register, registerResult);
                                     registerWebSocket = webSocket;
                                     webSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
@@ -504,13 +534,6 @@ public class ProxyClientManager implements InitializingBean {
                                     });
                                     log.info("注册成功：\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
                                     registerPromise.tryComplete(true);
-
-                                    // 为启用P2P的代理启动P2P客户端管理器
-                                    try {
-                                        initP2P(register.getUserProxies());
-                                    } catch (Exception e) {
-                                        log.error("P2P初始化异常（不影响中转模式）: {}", e.getMessage(), e);
-                                    }
                                 } else {
                                     registerWebSocket = null;
                                     webSocket.close();
@@ -533,14 +556,11 @@ public class ProxyClientManager implements InitializingBean {
                                     //输出更新代理信息成功
                                     log.info("更新代理信息成功：{}", registerResult.getMsg());
                                     register.setUpdated(true);
+                                    //更新代理信息
                                     updateProxies(register, registerResult);
-
-                                    // 任务10.2: 代理配置更新后，重新为P2P代理启动P2P客户端管理器
-                                    try {
-                                        initP2P(register.getUserProxies());
-                                    } catch (Exception e) {
-                                        log.error("P2P重新初始化异常（不影响中转模式）: {}", e.getMessage(), e);
-                                    }
+                                    //初始化支持P2P穿透的内网穿透，用于管理P2P客户端连接
+                                    this.initClientP2P(register.getProxies().stream().filter(r -> r.isEnable() && r.isEnable_p2p()).collect(Collectors.toList()));
+                                    this.initUserP2P(register.getUserProxies().stream().filter(UserProxy::isEnable).collect(Collectors.toList()));
                                 } else {
                                     log.error("更新代理信息失败：{}", registerResult.getMsg());
                                 }
@@ -552,9 +572,30 @@ public class ProxyClientManager implements InitializingBean {
                         }
                         case CLOSE:
                         case RECEIVE: {
-                            receiveData(webSocket, buffer, msgType);
+                            receiveData(remotePort, webSocket, buffer, msgType);
                             break;
                         }
+                        case UDP_TUNNEL_REQUEST:
+                            //发送外网端口号到注册端口，服务器收到后可和注册配置关联起来
+                            String userRemoteAddress = buffer.getBuffer(TYPE_PORT_LEN, buffer.length()).toString();
+                            String userRemoteHost = userRemoteAddress.substring(0, userRemoteAddress.indexOf(":"));
+                            int userRemotePort = Integer.parseInt(userRemoteAddress.substring(userRemoteAddress.indexOf(":") + 1));
+                            log.info("收到用户端打洞后的外网地址：{}", userRemoteAddress);
+                            DatagramSocket datagramSocket = remotePortUdpSocketMap.getOrDefault(remotePort, vertx.createDatagramSocket());
+                            remotePortUdpSocketMap.put(remotePort, datagramSocket);
+                            datagramSocket.handler(packet -> {
+                                log.info("收到P2P用户端[{}]UDP数据包：{}", packet.sender(), packet.data().toString());
+                                vertx.setTimer(2000, id -> {
+                                    datagramSocket.send(packet.data(), packet.sender().port(), packet.sender().host());
+                                });
+                            });
+                            log.info("发送udp消息到注册地址：{}", registerHost + ":" + registerPort);
+                            datagramSocket.send(Buffer.buffer().appendByte(JRPMsgType.UDP_TUNNEL_RESPONSE.getCode()).appendBytes(PortConverter.getRemotePortByte(remotePort)), registerPort, registerHost);
+                            vertx.setTimer(1000, id -> {
+                                log.info("发送udp消息到用户端地址：{}", userRemoteAddress);
+                                datagramSocket.send(String.valueOf(remotePort), userRemotePort, userRemoteHost);
+                            });
+                            break;
                     }
                 });
 
@@ -602,6 +643,117 @@ public class ProxyClientManager implements InitializingBean {
         return registerPromise.future();
     }
 
+
+    private void initUserP2P(List<UserProxy> userProxyList) {
+        for (UserProxy userProxy : userProxyList) {
+            //启动本地监听，打洞成功后，发送外网端口号到注册端口
+            DatagramSocketOptions options = new DatagramSocketOptions().setReusePort(true).setReuseAddress(true);
+            DatagramSocket datagramSocket = vertx.createDatagramSocket(options);
+            datagramSocket.handler(packet -> {
+                Buffer buffer = packet.data();
+                log.info("收到来自内网服务外网打洞地址[{}]的UDP数据包：{}", packet.sender(), buffer);
+                JRPMsgType jrpMsgType = JRPMsgType.getByCode(buffer.getByte(0));
+                if (jrpMsgType == JRPMsgType.UDP_TUNNEL_RESPONSE) {
+                    String lanRemoteAddress = buffer.getBuffer(JRPMsgType.TYPE_PORT_LEN, buffer.length()).toString();
+                    log.info("缓存来自内网服务外网打洞地址：{}", packet.sender());
+                    remotePortUdpSocketMap.put(userProxy.getRemote_port(), datagramSocket);
+                    log.info("发送消息到内网服务外网打洞地址：{}", packet.sender());
+                    datagramSocket.handler(p2pPacket -> {
+                        log.info("已打洞成功，返回消息到内网服务外网打洞地址[{}]", p2pPacket.sender());
+                        vertx.setTimer(2000, id -> {
+                            datagramSocket.send(p2pPacket.data(), p2pPacket.sender().port(), p2pPacket.sender().host());
+                        });
+                        //this.receiveP2PData(packet);
+                    });
+                    datagramSocket.send(buffer, Integer.parseInt(lanRemoteAddress.split(":")[1]), lanRemoteAddress.split(":")[0]);
+                }
+            });
+            datagramSocket.send(Buffer.buffer().appendByte(JRPMsgType.UDP_TUNNEL_REQUEST.getCode()).appendBytes(PortConverter.getRemotePortByte(userProxy.getRemote_port())), registerPort, registerHost);
+            vertx.createNetServer().connectHandler(socket -> {
+                SocketAddress socketAddress = remotePortSenderMap.get(userProxy.getRemote_port());
+                if (userProxy.getType() == ServiceType.TCP || userProxy.getType() == ServiceType.HTTP_PROXY || userProxy.getType() == ServiceType.HTTPS_PROXY || userProxy.getType() == ServiceType.SOCKS5 || userProxy.getType() == ServiceType.SOCKS4 || userProxy.getType() == ServiceType.SMART_PROXY) {
+                    datagramSocket.send(Buffer.buffer(), socketAddress.port(), socketAddress.host());
+                }
+                socket.handler(buffer -> {
+                    datagramSocket.send(buffer, socketAddress.port(), socketAddress.host());
+                });
+            }).listen(userProxy.getLocal_port());
+        }
+    }
+
+    /**
+     * 处理P2P穿透数据
+     *
+     * @param packet
+     */
+    private void receiveP2PData(DatagramPacket packet) {
+        //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为
+        Buffer buffer = packet.data();
+        byte msgType = buffer.getByte(0);
+        JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
+        //代理端口
+        Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_LEN).getUnsignedShort(0);
+        if (jrpMsgType == null) {
+            log.error("未知p2p消息类型：{}", buffer);
+            return;
+        }
+        switch (jrpMsgType) {
+            case CLOSE:
+            case RECEIVE: {
+                //请求唯一标识,代理端口之后开始取
+                Integer requestId = buffer.getBuffer(TYPE_PORT_LEN, TYPE_PORT_REQUEST_ID_LEN).getInt(0);
+                //获取消息标识：代理端口+请求id，消息类型之后取
+                Buffer msgId = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_REQUEST_ID_LEN);
+                //收到外网穿透服务器发送的客户端请求通知
+                Buffer data = buffer.getBuffer(TYPE_PORT_REQUEST_ID_LEN, buffer.length());
+                log.debug("收到用户端p2p请求消息[{}]！", requestId);
+                ClientProxy proxy = resolveProxy(remotePort, data);
+                if (proxy == null) {
+                    log.warn("未找到代理端口[{}]对应的客户端！", remotePort);
+                    return;
+                }
+                DatagramSocket datagramSocket = remotePortUdpSocketMap.get(remotePort);
+                SocketAddress sender = remotePortSenderMap.get(remotePort);
+                Consumer<Buffer> bufferConsumer = (Buffer backData) -> datagramSocket.send(backData, sender.port(), sender.host());
+                switch (proxy.getType()) {
+                    case HTTP:
+                    case HTTPS:
+                    case TCP:
+                        handlerMap.get(ServiceType.TCP).handle(bufferConsumer, msgType, msgId, requestId, proxy, data);
+                        break;
+                    case UDP:
+                        handlerMap.get(ServiceType.UDP).handle(bufferConsumer, msgType, msgId, requestId, proxy, data);
+                        break;
+                    case HTTP_PROXY:
+                    case HTTPS_PROXY:
+                    case SOCKS4:
+                    case SOCKS5:
+                    case SMART_PROXY:
+                        handlerMap.get(ServiceType.SMART_PROXY).handle(bufferConsumer, msgType, msgId, requestId, proxy, data);
+                        break;
+                }
+                break;
+            }
+            case UDP_TUNNEL_RESPONSE:
+                remotePortSenderMap.put(remotePort, packet.sender());
+                break;
+        }
+    }
+
+    /**
+     * 初始化支持P2P穿透的内网穿透，用于管理P2P客户端连接
+     *
+     * @param p2pProxies 用户端p2p穿透信息
+     */
+    private void initClientP2P(List<ClientProxy> p2pProxies) {
+        for (ClientProxy proxy : p2pProxies) {
+            if (proxy.isEnable_p2p()) {
+                DatagramSocket datagramSocket = vertx.createDatagramSocket();
+                remotePortUdpSocketMap.put(proxy.getRemote_port(), datagramSocket);
+            }
+        }
+    }
+
     /**
      * 更新代理信息
      *
@@ -611,14 +763,23 @@ public class ProxyClientManager implements InitializingBean {
      */
     private void updateProxies(ClientRegister register, RegisterResult registerResult) {
         List<ClientProxy> proxies = registerResult.getProxies();
+        //保存服务器中转穿透信息
         if (proxies != null) {
-            configService.save(proxies);
+            configService.saveRemoteProxies(proxies);
             register.setProxies(proxies);
         } else {
             proxies = register.getProxies();
         }
+        //保存用户端p2p穿透信息
+        List<UserProxy> userProxies = registerResult.getUserProxies();
+        if (userProxies != null) {
+            configService.saveUserProxies(userProxies);
+            register.setUserProxies(userProxies);
+        }
         remotePortClientMap = proxies.stream().collect(Collectors.toMap(ClientProxy::getRemote_port, r -> r, (a, b) -> a));
         this.register = register;
+        //输出穿透信息
+        log.info("服务器中转穿透信息：");
         for (ClientProxy proxy : register.getProxies()) {
             if (proxy.getType() != null) {
                 //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
@@ -665,18 +826,65 @@ public class ProxyClientManager implements InitializingBean {
                 log.info(logMessage);
             }
         }
+        //输出用户端p2p穿透信息
+        log.info("用户端p2p穿透信息：");
+        for (UserProxy proxy : register.getUserProxies()) {
+            if (proxy.getType() != null) {
+                //HTTP，HTTPS、TCP、UDP、SOCKS4、SOCKS5
+                String message;
+                String logMessage = "";
+                switch (proxy.getType()) {
+                    case HTTP:
+                        message = "HTTP服务[外网转发端口%s]P2P穿透后本地地址：[http://127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case HTTPS:
+                        message = "HTTPS服务[外网转发端口%s]P2P穿透后本地地址：[https://127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case TCP:
+                        message = "TCP服务[外网转发端口%s]穿透后本地地址：[127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case UDP:
+                        message = "UDP服务[外网转发端口%s]穿透后本地地址：[127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case HTTP_PROXY:
+                        message = "HTTP代理服务[外网转发端口%s]穿透后外网代理地址：[http://127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case HTTPS_PROXY:
+                        message = "HTTPS代理服务[外网转发端口%s]穿透后外网代理地址：[https://127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case SOCKS4:
+                        message = "SOCKS4代理服务[外网转发端口%s]穿透后外网代理地址：[127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case SOCKS5:
+                        message = "SOCKS5代理服务[外网转发端口%s]穿透后外网代理地址：[127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                    case SMART_PROXY:
+                        message = "智能代理(同时支持http代理、https代理、socks4、socks4a、socks5)服务[外网转发端口%s]穿透后外网代理地址：[127.0.0.1:%s]！";
+                        logMessage = String.format(message, proxy.getRemote_port(), proxy.getLocal_port());
+                        break;
+                }
+                log.info(logMessage);
+            }
+        }
     }
 
     /**
      * 接收到服务端返回的消息
      *
-     * @param webSocket websocket隧道
-     * @param buffer    数据
-     * @param msgType   消息类型
+     * @param remotePort 端口
+     * @param webSocket  websocket隧道
+     * @param buffer     数据
+     * @param msgType    消息类型
      */
-    private void receiveData(WebSocket webSocket, Buffer buffer, byte msgType) {
-        //代理端口
-        Integer remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_LEN).getUnsignedShort(0);
+    private void receiveData(Integer remotePort, WebSocket webSocket, Buffer buffer, byte msgType) {
         //请求唯一标识,代理端口之后开始取
         Integer requestId = buffer.getBuffer(TYPE_PORT_LEN, TYPE_PORT_REQUEST_ID_LEN).getInt(0);
         //获取消息标识：代理端口+请求id，消息类型之后取
@@ -693,17 +901,17 @@ public class ProxyClientManager implements InitializingBean {
             case HTTP:
             case HTTPS:
             case TCP:
-                handlerMap.get(ServiceType.TCP).handle(webSocket, msgType, msgId, requestId, proxy, data);
+                handlerMap.get(ServiceType.TCP).handle(webSocket::write, msgType, msgId, requestId, proxy, data);
                 break;
             case UDP:
-                handlerMap.get(ServiceType.UDP).handle(webSocket, msgType, msgId, requestId, proxy, data);
+                handlerMap.get(ServiceType.UDP).handle(webSocket::write, msgType, msgId, requestId, proxy, data);
                 break;
             case HTTP_PROXY:
             case HTTPS_PROXY:
             case SOCKS4:
             case SOCKS5:
             case SMART_PROXY:
-                handlerMap.get(ServiceType.SMART_PROXY).handle(webSocket, msgType, msgId, requestId, proxy, data);
+                handlerMap.get(ServiceType.SMART_PROXY).handle(webSocket::write, msgType, msgId, requestId, proxy, data);
                 break;
         }
     }
@@ -774,191 +982,6 @@ public class ProxyClientManager implements InitializingBean {
         options.setTrustAll(true);
         options.setVerifyHost(false);
         return options;
-    }
-
-    // ==================== P2P 功能集成 ====================
-
-    /**
-     * 初始化P2P客户端管理器
-     * 遍历所有穿透配置，为启用P2P的代理创建P2P客户端
-     *
-     * @param proxies 穿透配置列表
-     */
-    private void initP2P(List<UserProxy> proxies) {
-        if (properties.getP2pReconnectTimes() == null || properties.getP2pReconnectTimes() <= 0) {
-            log.warn("P2P重连次数配置无效: {}，使用默认值3", properties.getP2pReconnectTimes());
-        }
-
-        // 先停止已有的P2P客户端，避免重复启动
-        stopAllP2P();
-
-        log.info("========================================");
-        log.info("启动模式: 用户模式 (P2P直连)");
-        log.info("P2P重连次数: {}", properties.getP2pReconnectTimes());
-        log.info("P2P服务地址: {} (将使用各代理的remote_port)", registerHost);
-        log.info("========================================");
-
-        if (proxies == null || proxies.isEmpty()) {
-            log.info("没有穿透配置，跳过P2P初始化");
-            return;
-        }
-
-        String clientId = ClientIdUtils.getClientId();
-
-        for (UserProxy proxy : proxies) {
-            log.info("为代理[{}]启动P2P客户端: proxyId={}, type={}", proxy.getName(), proxy.getId(), proxy.getType());
-
-            // 检查代理类型是否支持P2P
-            if (!isP2PSupportedType(proxy.getType())) {
-                log.warn("代理类型[{}]不支持P2P: proxyId={}", proxy.getType(), proxy.getId());
-                continue;
-            }
-
-            // 校验remote_port：P2P模式必须预配置remote_port
-            Integer remotePort = proxy.getRemote_port();
-            if (remotePort == null || remotePort <= 0) {
-                log.error("代理[{}]启用P2P但未配置remote_port，跳过: proxyId={}。P2P模式下必须为每个代理预配置外网穿透端口。",
-                        proxy.getName(), proxy.getId());
-                continue;
-            }
-
-            // 使用代理自身的remote_port作为P2P服务器打洞端口（与TCP转发共用）
-            String p2pServerAddress = registerHost + ":" + remotePort;
-            log.info("代理[{}] P2P服务地址: {} (remote_port={})", proxy.getName(), p2pServerAddress, remotePort);
-            P2PClientManager p2pManager = getP2PClientManager(proxy, clientId, p2pServerAddress);
-            p2pClientManagers.put(proxy.getId(), p2pManager);
-        }
-
-        log.info("P2P初始化完成，已启动 {} 个P2P客户端", p2pClientManagers.size());
-    }
-
-    private P2PClientManager getP2PClientManager(UserProxy proxy, String clientId, String p2pServerAddress) {
-        Integer localAccessPort = proxy.getLocal_port();
-        // 创建P2P客户端管理器
-        P2PClientManager p2pManager = new P2PClientManager(
-                clientId,
-                proxy,
-                p2pServerAddress,
-                vertx,
-                properties.getP2pReconnectTimes(),
-                localAccessPort,
-                new P2PClientManager.P2PCallback() {
-                    @Override
-                    public void onConnected() {
-                        log.info("P2P连接成功: proxyId={}, name={}, 本地访问端口={}",
-                                proxy.getId(), proxy.getName(), localAccessPort);
-                        log.info("P2P直连已建立，可通过 [127.0.0.1:{}] 访问内网服务[{}]",
-                                localAccessPort, proxy.getRemote_port());
-                    }
-
-                    @Override
-                    public void onFailed(String reason) {
-                        log.warn("P2P连接失败: proxyId={}, name={}, reason={}",
-                                proxy.getId(), proxy.getName(), reason);
-                        // 任务10.4: P2P失败时自动回退到中转模式
-                        log.info("P2P失败，该代理[{}]将使用服务器中转模式", proxy.getId());
-                    }
-
-                    @Override
-                    public void onDataReceived(byte[] data) {
-                        log.debug("收到P2P数据: proxyId={}, dataLength={}", proxy.getId(), data.length);
-                        // 处理P2P隧道数据
-                        handleP2PData(proxy, data);
-                    }
-                });
-
-        // 启动P2P客户端
-        p2pManager.start();
-        return p2pManager;
-    }
-
-    /**
-     * 判断代理类型是否支持P2P
-     */
-    private boolean isP2PSupportedType(ServiceType type) {
-        return type == ServiceType.HTTP || type == ServiceType.HTTPS
-                || type == ServiceType.TCP || type == ServiceType.UDP;
-    }
-
-    /**
-     * 处理P2P数据
-     * 任务12: 增加详细日志和异常保护，便于端到端测试诊断
-     */
-    private void handleP2PData(UserProxy proxy, byte[] data) {
-        try {
-            P2PClientManager p2pMgr = p2pClientManagers.get(proxy.getId());
-            if (p2pMgr == null) {
-                log.warn("未找到P2P客户端管理器: proxyId={}", proxy.getId());
-                return;
-            }
-
-            LocalProxyServer proxyServer = p2pMgr.getLocalProxyServer();
-            if (proxyServer == null || !proxyServer.isRunning()) {
-                log.warn("本地代理服务器未运行: proxyId={}", proxy.getId());
-                return;
-            }
-
-            if (log.isDebugEnabled()) {
-                log.debug("处理P2P数据: proxyId={}, state={}, dataLength={}, connections={}",
-                        proxy.getId(), p2pMgr.getState(), data.length, proxyServer.getConnectionCount());
-            }
-        } catch (Exception e) {
-            log.error("处理P2P数据异常: proxyId={}", proxy.getId(), e);
-        }
-    }
-
-    /**
-     * 停止所有P2P客户端
-     */
-    private void stopAllP2P() {
-        if (p2pClientManagers.isEmpty()) {
-            return;
-        }
-
-        log.info("停止所有P2P客户端 ({}个)", p2pClientManagers.size());
-
-        for (Map.Entry<String, P2PClientManager> entry : p2pClientManagers.entrySet()) {
-            try {
-                entry.getValue().stop();
-                log.debug("停止P2P客户端: proxyId={}", entry.getKey());
-            } catch (Exception e) {
-                log.error("停止P2P客户端失败: proxyId={}", entry.getKey(), e);
-            }
-        }
-
-        p2pClientManagers.clear();
-        log.info("所有P2P客户端已停止");
-    }
-
-    /**
-     * 获取P2P客户端管理器映射
-     */
-    public Map<String, P2PClientManager> getP2PClientManagers() {
-        return p2pClientManagers;
-    }
-
-    /**
-     * 获取P2P状态信息
-     * 任务10.5: 提供P2P状态查询
-     */
-    public String getP2PStatus() {
-        if (p2pClientManagers.isEmpty()) {
-            return "无P2P代理配置";
-        }
-
-        StringBuilder status = new StringBuilder();
-        for (Map.Entry<String, P2PClientManager> entry : p2pClientManagers.entrySet()) {
-            P2PClientManager mgr = entry.getValue();
-            status.append("[proxyId=").append(entry.getKey())
-                    .append(", state=").append(mgr.getState());
-            LocalProxyServer proxyServer = mgr.getLocalProxyServer();
-            if (proxyServer != null && proxyServer.isRunning()) {
-                status.append(", localPort=").append(proxyServer.getLocalPort())
-                        .append(", connections=").append(proxyServer.getConnectionCount());
-            }
-            status.append("] ");
-        }
-        return status.toString();
     }
 }
 

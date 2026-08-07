@@ -1,16 +1,20 @@
 package com.tony.jrp.server.service.impl;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.tony.jrp.common.enums.JRPMsgType;
+import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
 import com.tony.jrp.common.model.RegisterResult;
+import com.tony.jrp.common.model.UserProxy;
 import com.tony.jrp.server.config.JRPServerProperties;
-import com.tony.jrp.server.manager.P2PSessionManager;
 import com.tony.jrp.server.model.RegisterInfo;
 import com.tony.jrp.server.service.IRegisterService;
 import com.tony.jrp.server.service.ITraversalService;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.datagram.DatagramSocket;
+import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.*;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
@@ -18,17 +22,21 @@ import io.vertx.core.net.PemKeyCertOptions;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.Route;
 import io.vertx.ext.web.Router;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.sql.Timestamp;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static com.tony.jrp.common.enums.JRPMsgType.TYPE_PORT_LEN;
 
 /**
  * 穿透服务端-代理转发服务管理
@@ -72,25 +80,35 @@ public class ProxyServerManager implements InitializingBean {
      * 所有注册成功的内外穿透代理信息
      */
     protected final Map<String, RegisterInfo> registerMap = new ConcurrentHashMap<>();
+    /**
+     * 所有注册成功的内外穿透代理IP集合，用于校验p2p穿透IP的合法性
+     */
+    protected final Set<String> registerIpSet = Collections.synchronizedSet(new HashSet<>());
 
     /**
-     * P2P会话管理器
+     * 内网穿透服务客户端打洞服务
      */
-    protected P2PSessionManager p2pSessionManager;
+    @Data
+    private static class TunnelInfo {
+        private int remotePort;
+        @JsonIgnore
+        private ServerWebSocket userWebsocket;
+        private SocketAddress userRemoteAddress;
+        @JsonIgnore
+        private ServerWebSocket lanWebsocket;
+        private SocketAddress lanRemoteAddress;
+    }
+
+    final Map<Integer, TunnelInfo> tunnelMap = new ConcurrentHashMap<>();
 
     /**
      * 暴露P2P会话管理器为Spring Bean，供TraversalServiceImpl注入
      */
-    @Bean
-    public P2PSessionManager p2pSessionManager() {
-        return this.p2pSessionManager;
-    }
 
     @Override
     public void afterPropertiesSet() {
         this.startServer();
         this.startRegisterListener();
-        this.startP2PServer();
     }
 
     /**
@@ -130,7 +148,9 @@ public class ProxyServerManager implements InitializingBean {
      */
     private void startRegisterListener() {
         HttpServerOptions serverOptions = getHttpServerOptions();
+        serverOptions.setReusePort(true);
         HttpServer vertxHttpServer = vertx.createHttpServer(serverOptions);
+        //初始化websocket注册处理器
         vertxHttpServer.webSocketHandler(serverWebSocket -> {
             SocketAddress remoteAddress = serverWebSocket.remoteAddress();
             String textHandlerID = serverWebSocket.textHandlerID();
@@ -168,12 +188,13 @@ public class ProxyServerManager implements InitializingBean {
                                 });
                                 long finalServerPing = serverPing;
                                 serverWebSocket.closeHandler(handler -> {
+                                    registerIpSet.remove(remoteAddress.host());
                                     vertx.cancelTimer(finalServerPing);
                                     RegisterInfo remove = registerMap.remove(textHandlerID);
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
                                         reverseService.stop(remove.getProxies(), serverWebSocket)
-                                                .onSuccess(proxySuccess -> log.info("{}", proxySuccess))
+                                                .onSuccess(proxySuccess -> log.info("停止代理成功[{}]！", remoteAddress))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
                                         remove.setStatus(STATUS_OFFLINE);
                                         remove.setOffline_time(new Timestamp(System.currentTimeMillis()));
@@ -189,6 +210,7 @@ public class ProxyServerManager implements InitializingBean {
                                     serverWebSocket.close();
                                 });
                                 RegisterInfo registerInfo = new RegisterInfo();
+                                registerInfo.setWebSocket(serverWebSocket);
                                 registerInfo.setId(textHandlerID);
                                 registerInfo.setHost(remoteAddress.host());
                                 registerInfo.setPort(remoteAddress.port());
@@ -198,6 +220,7 @@ public class ProxyServerManager implements InitializingBean {
                                 registerInfo.setUsername(clientRegister.getUsername());
                                 registerInfo.setPassword(clientRegister.getPassword());
                                 registerInfo.setProxies(clientRegister.getProxies());
+                                registerInfo.setUserProxies(clientRegister.getUserProxies());
                                 registerInfo.setRegister_time(new Timestamp(System.currentTimeMillis()));
                                 registerInfo.setStatus(STATUS_ONLINE);
                                 registerMap.put(textHandlerID, registerInfo);
@@ -205,6 +228,7 @@ public class ProxyServerManager implements InitializingBean {
                                 log.info("来自[{}]的服务注册成功,textHandlerID[{}]:\r\n{}", remoteAddress, textHandlerID, prettily);
                                 RegisterResult success = RegisterResult.success("注册成功！");
                                 success.setProxies(clientRegister.getProxies());
+                                registerIpSet.add(remoteAddress.host());
                                 serverWebSocket.write(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(success))));
                             } catch (Exception e) {
                                 log.error("来自[{}]的服务注册失败:{}", remoteAddress, e.getMessage(), e);
@@ -234,18 +258,79 @@ public class ProxyServerManager implements InitializingBean {
                 }
             });
         });
-//        vertxHttpServer.requestHandler(request -> {
-//            HttpServerResponse response = request.response();
-//            response.putHeader("content-type", "text/plain");
-//            response.setStatusCode(HttpResponseStatus.OK.code()).end("Hello from jrp-server!");
-//        });
+
+        //初始化udp服务用于打洞，用户端、内网客户端都通过该服务打洞
+        vertx.createDatagramSocket(new DatagramSocketOptions().setReusePort(true)).listen(this.properties.getRegisterPort(), "0.0.0.0", ar -> {
+            if (ar.succeeded()) {
+                log.info("代理配置服务UDP服务启动成功，端口[{}]", this.properties.getRegisterPort());
+                DatagramSocket result = ar.result();
+                result.handler(packet -> {
+                    //校验remoteIp是否和用户注册的IP一致
+                    if (!registerIpSet.contains(packet.sender().host())) {
+                        log.warn("来自[{}]的打洞请求失败，不允许跨域访问！", packet.sender());
+                        return;
+                    }
+                    //查找需要打洞访问的内网服务中转端口
+                    Buffer buffer = packet.data();
+                    byte msgType = buffer.getByte(0);
+                    int remotePort = buffer.getBuffer(JRPMsgType.TYPE_LEN, TYPE_PORT_LEN).getUnsignedShort(0);
+                    synchronized (tunnelMap) {
+                        //如果已经存在隧道，则直接转发打洞地址到用户端
+                        if (msgType == JRPMsgType.UDP_TUNNEL_REQUEST.getCode()) {
+                            ServerWebSocket userServerSocket = null;
+                            for (RegisterInfo registerInfo : registerMap.values()) {
+                                Optional<UserProxy> first = registerInfo.getUserProxies().stream().filter(proxy -> proxy.isEnable() && proxy.getRemote_port().equals(remotePort)).findFirst();
+                                if (first.isPresent()) {
+                                    userServerSocket = registerInfo.getWebSocket();
+                                    break;
+                                }
+                            }
+                            ServerWebSocket lanServerSocket = null;
+                            for (RegisterInfo registerInfo : registerMap.values()) {
+                                Optional<ClientProxy> first = registerInfo.getProxies().stream().filter(proxy -> proxy.isEnable() && proxy.isEnable_p2p() && proxy.getRemote_port().equals(remotePort)).findFirst();
+                                if (first.isPresent()) {
+                                    lanServerSocket = registerInfo.getWebSocket();
+                                    break;
+                                }
+                            }
+                            if (lanServerSocket != null && userServerSocket != null) {
+                                TunnelInfo tunnelInfo = new TunnelInfo();
+                                tunnelInfo.setRemotePort(remotePort);
+                                tunnelInfo.setUserWebsocket(userServerSocket);
+                                tunnelInfo.setLanWebsocket(lanServerSocket);
+                                tunnelInfo.setUserRemoteAddress(packet.sender());
+                                tunnelMap.put(remotePort, tunnelInfo);
+                                String sender = packet.sender().toString();
+                                log.info("来自[{}]的打洞请求成功，转发打洞地址到内网客户端！", sender);
+                                byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
+                                lanServerSocket.write(Buffer.buffer(TYPE_PORT_LEN + sender.length()).appendByte(JRPMsgType.UDP_TUNNEL_REQUEST.getCode()).appendBytes(remotePortByte).appendBuffer(Buffer.buffer(sender)));
+                            } else {
+                                log.warn("来自[{}]的打洞请求失败，找不到对应的内网服务中转端口{}！", packet.sender(), remotePort);
+                            }
+                        } else {
+                            TunnelInfo tunnelInfo = tunnelMap.get(remotePort);
+                            String sender = packet.sender().toString();
+                            tunnelInfo.setLanRemoteAddress(packet.sender());
+                            log.info("来自[{}]的打洞请求成功，转发打洞地址到用户端！", sender);
+                            byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
+                            result.send(Buffer.buffer(TYPE_PORT_LEN + sender.length()).appendByte(JRPMsgType.UDP_TUNNEL_RESPONSE.getCode()).appendBytes(remotePortByte).appendBuffer(Buffer.buffer(sender)),
+                                    tunnelInfo.getUserRemoteAddress().port(), tunnelInfo.getUserRemoteAddress().host());
+                        }
+                    }
+                });
+            } else {
+                log.error("代理配置服务UDP服务启动失败：{}", ar.cause().getMessage(), ar.cause());
+            }
+        });
         vertxHttpServer.exceptionHandler(err -> log.error("代理配置服务访问异常：{}", err.getMessage(), err));
         vertxHttpServer.invalidRequestHandler(request -> {
             //n: Invalid escape sequence: %%3
             log.error("[{}]代理配置服务非法访问invalid异常!", request.remoteAddress());
             request.response().setStatusCode(HttpResponseStatus.UNAUTHORIZED.code()).end();
         });
-        vertxHttpServer.listen(this.properties.getRegisterPort());
+        vertxHttpServer.listen(this.properties.getRegisterPort()).onSuccess(res -> {
+            log.info("代理配置服务HTTP服务启动成功，端口[{}]", this.properties.getRegisterPort());
+        });
     }
 
     private HttpServerOptions getHttpServerOptions() {
@@ -264,21 +349,5 @@ public class ProxyServerManager implements InitializingBean {
             }
         }
         return serverOptions;
-    }
-
-    /**
-     * 初始化P2P会话管理器
-     * P2P打洞UDP监听不再使用全局端口，而是按每个启用P2P的穿透配置的remote_port动态部署
-     * remote_port同时承载TCP转发和UDP打洞（协议不同可共存同一端口）
-     */
-    private void startP2PServer() {
-        try {
-            // 初始化P2P会话管理器
-            p2pSessionManager = new P2PSessionManager(properties.getP2pTimeout());
-            log.info("P2P会话管理器已初始化，超时时间: {}秒", properties.getP2pTimeout());
-            log.info("P2P打洞UDP监听将在收到客户端注册时按remote_port动态部署");
-        } catch (Exception e) {
-            log.error("初始化P2P会话管理器异常", e);
-        }
     }
 }

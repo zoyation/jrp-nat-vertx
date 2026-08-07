@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.tony.jrp.client.config.ProxyClientConfig;
 import com.tony.jrp.client.service.IConfigService;
 import com.tony.jrp.common.model.ClientProxy;
+import com.tony.jrp.common.model.UserProxy;
 import io.vertx.config.ConfigStoreOptions;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.Json;
@@ -17,7 +18,6 @@ import org.springframework.core.io.ClassPathResource;
 
 import java.io.*;
 import java.util.List;
-import java.util.Objects;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -45,7 +45,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
     }
 
     @Override
-    public void list(RoutingContext ctx) {
+    public void listRemoteProxies(RoutingContext ctx) {
         this.end(() -> {
             try {
                 return Json.encode(getConfig().getRemote_proxies());
@@ -56,11 +56,11 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
     }
 
     @Override
-    public void save(RoutingContext ctx) {
+    public void saveRemoteProxies(RoutingContext ctx) {
         ctx.request().body().onSuccess(buffer -> {
             List<ClientProxy> remote_proxies = JacksonCodec.decodeValue(buffer, new TypeReference<List<ClientProxy>>() {
             });
-            this.end(() -> String.valueOf(this.save(remote_proxies)), ctx);
+            this.end(() -> String.valueOf(this.saveRemoteProxies(remote_proxies)), ctx);
         });
     }
 
@@ -71,7 +71,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
      * @return 配置信息
      */
     @Override
-    public int save(List<ClientProxy> list) {
+    public int saveRemoteProxies(List<ClientProxy> list) {
         // 校验路由规则配置
         for (ClientProxy proxy : list) {
             if (proxy.getRoutes() != null && !proxy.getRoutes().isEmpty()) {
@@ -103,7 +103,65 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
             throw new RuntimeException(e);
         }
     }
+    @Override
+    public void listUserProxies(RoutingContext ctx) {
+        this.end(() -> {
+            try {
+                return Json.encode(getConfig().getUser_proxies());
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }, ctx);
+    }
 
+    @Override
+    public void saveUserProxies(RoutingContext ctx) {
+        ctx.request().body().onSuccess(buffer -> {
+            List<UserProxy> remote_proxies = JacksonCodec.decodeValue(buffer, new TypeReference<List<UserProxy>>() {
+            });
+            this.end(() -> String.valueOf(this.saveUserProxies(remote_proxies)), ctx);
+        });
+    }
+
+    /**
+     * 保存配置信息
+     *
+     * @param list 配置信息列表
+     * @return 配置信息
+     */
+    @Override
+    public int saveUserProxies(List<UserProxy> list) {
+        // 校验路由路径不重复
+        long distinctLocations = list.stream()
+                .map(UserProxy::getRemote_port)
+                .distinct().count();
+        if (distinctLocations < list.size()) {
+            throw new RuntimeException("存在相同的穿透外网访问端口，请配置为不同的端口");
+        }
+        // 校验路由规则配置
+        for (UserProxy proxy : list) {
+            // 只有HTTP/HTTPS类型支持p2p打洞
+            if (proxy.getType() != com.tony.jrp.common.enums.ServiceType.HTTP
+                    && proxy.getType() != com.tony.jrp.common.enums.ServiceType.HTTPS
+                    && proxy.getType() != com.tony.jrp.common.enums.ServiceType.TCP
+                    && proxy.getType() != com.tony.jrp.common.enums.ServiceType.UDP) {
+                throw new RuntimeException("服务[" + proxy.getName() + "]仅HTTP/HTTPS类型支持P2P打洞");
+            }
+        }
+        ProxyClientConfig proxyConfig;
+        try {
+            proxyConfig = getConfig();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        proxyConfig.setUser_proxies(list);
+        try {
+            saveToFile(getConfigFilePath(), Json.encode(proxyConfig));
+            return list.size();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
     /**
      * 初始化配置
      *

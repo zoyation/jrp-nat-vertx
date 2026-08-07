@@ -1,6 +1,7 @@
 package com.tony.jrp.client.service;
 
 import com.tony.jrp.common.model.ClientProxy;
+import com.tony.jrp.common.model.UserProxy;
 import io.vertx.config.ConfigStoreOptions;
 import io.vertx.ext.web.RoutingContext;
 
@@ -20,7 +21,8 @@ public interface IConfigService {
             "      \"name\": \"HTTP配置页面映射\",\n" +
             "      \"proxy_pass\": \"http://127.0.0.1:8000\",\n" +
             "      \"type\": \"HTTP\",\n" +
-            "      \"remote_port\": 8001\n" +
+            "      \"remote_port\": 8001,\n" +
+            "      \"enable_p2p\": true\n" +
             "    },\n" +
             "    {\n" +
             "      \"id\": \"2\",\n" +
@@ -46,14 +48,14 @@ public interface IConfigService {
      *
      * @param ctx 上下文
      */
-    void list(RoutingContext ctx);
+    void listRemoteProxies(RoutingContext ctx);
 
     /**
      * 保存代理列表
      *
      * @param ctx 上下文
      */
-    void save(RoutingContext ctx);
+    void saveRemoteProxies(RoutingContext ctx);
 
     /**
      * 保存配置信息
@@ -61,7 +63,29 @@ public interface IConfigService {
      * @param list 配置信息列表
      * @return 配置信息
      */
-    public int save(List<ClientProxy> list);
+    public int saveRemoteProxies(List<ClientProxy> list);
+
+    /**
+     * 获取p2p配置列表
+     *
+     * @param ctx 上下文
+     */
+    void listUserProxies(RoutingContext ctx);
+
+    /**
+     * 保存p2p配置列表
+     *
+     * @param ctx 上下文
+     */
+    void saveUserProxies(RoutingContext ctx);
+
+    /**
+     * 保存p2p配置信息
+     *
+     * @param list 配置信息列表
+     * @return 配置信息
+     */
+    public int saveUserProxies(List<UserProxy> list);
 
     /**
      * 结束

@@ -6,12 +6,14 @@ import com.tony.jrp.client.config.ProxyClientProperties;
 import com.tony.jrp.client.config.RedisConfig;
 import com.tony.jrp.client.service.IConfigService;
 import com.tony.jrp.common.model.ClientProxy;
+import com.tony.jrp.common.model.UserProxy;
 import io.vertx.config.ConfigStoreOptions;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.json.jackson.JacksonCodec;
+import io.vertx.ext.auth.User;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.redis.client.*;
 import lombok.extern.slf4j.Slf4j;
@@ -54,7 +56,7 @@ public class RedisConfigServiceImpl implements IConfigService, InitializingBean 
     }
 
     @Override
-    public void list(RoutingContext ctx) {
+    public void listRemoteProxies(RoutingContext ctx) {
         redisAPI.hgetall(CONFIGURATION).onSuccess(response -> {
             Response config = response.get(JRP_CLIENT_CONFIG);
             if (config == null) {
@@ -67,7 +69,7 @@ public class RedisConfigServiceImpl implements IConfigService, InitializingBean 
     }
 
     @Override
-    public void save(RoutingContext ctx) {
+    public void saveRemoteProxies(RoutingContext ctx) {
         ctx.request().body().onSuccess(buffer -> {
             List<ClientProxy> remote_proxies = JacksonCodec.decodeValue(buffer, new TypeReference<List<ClientProxy>>() {
             });
@@ -97,7 +99,69 @@ public class RedisConfigServiceImpl implements IConfigService, InitializingBean 
      * @param list 配置信息列表
      * @return 配置信息
      */
-    public int save(List<ClientProxy> list){
+    public int saveUserProxies(List<UserProxy> list){
+        redisAPI.hgetall(CONFIGURATION).onSuccess(response -> {
+            ProxyClientConfig proxyClientConfig = Json.decodeValue(response.get(JRP_CLIENT_CONFIG).toString(), ProxyClientConfig.class);
+            proxyClientConfig.setUser_proxies(list);
+            List<String> dataList = new ArrayList<>(2);
+            dataList.add(CONFIGURATION);
+            dataList.add(JRP_CLIENT_CONFIG);
+            dataList.add(Json.encode(proxyClientConfig));
+            redisAPI.hset(dataList).onSuccess(setResponse -> {
+                log.info("保存成功");
+            }).onFailure(throwable -> {
+                //抛出异常
+                log.error("保存异常：{}", throwable.getMessage(), throwable);
+                throw new RuntimeException(throwable);
+            });
+        });
+        return list.size();
+    }
+    @Override
+    public void listUserProxies(RoutingContext ctx) {
+        redisAPI.hgetall(CONFIGURATION).onSuccess(response -> {
+            Response config = response.get(JRP_CLIENT_CONFIG);
+            if (config == null) {
+                this.end(() -> "{}", ctx);
+                return;
+            }
+            List<UserProxy> remoteProxies = Json.decodeValue(config.toString(), ProxyClientConfig.class).getUser_proxies();
+            this.end(() -> Json.encode(remoteProxies), ctx);
+        });
+    }
+
+    @Override
+    public void saveUserProxies(RoutingContext ctx) {
+        ctx.request().body().onSuccess(buffer -> {
+            List<UserProxy> proxies = JacksonCodec.decodeValue(buffer, new TypeReference<List<UserProxy>>() {
+            });
+            redisAPI.hgetall(CONFIGURATION).onSuccess(response -> {
+                ProxyClientConfig proxyClientConfig = Json.decodeValue(response.get(JRP_CLIENT_CONFIG).toString(), ProxyClientConfig.class);
+                proxyClientConfig.setUser_proxies(proxies);
+                List<String> dataList = new ArrayList<>(2);
+                dataList.add(CONFIGURATION);
+                dataList.add(JRP_CLIENT_CONFIG);
+                dataList.add(Json.encode(proxyClientConfig));
+                redisAPI.hset(dataList).onSuccess(setResponse -> {
+                    this.end(() -> String.valueOf(proxies.size()), ctx);
+                }).onFailure(throwable -> {
+                    ctx.response().setStatusCode(500);
+                    this.end(() -> "保存异常：" + throwable.getMessage(), ctx);
+                });
+            }).onFailure(throwable -> {
+                ctx.response().setStatusCode(500);
+                this.end(() -> "获取原始配置异常：" + throwable.getMessage(), ctx);
+            });
+
+        });
+    }
+    /**
+     * 保存配置信息
+     *
+     * @param list 配置信息列表
+     * @return 配置信息
+     */
+    public int saveRemoteProxies(List<ClientProxy> list){
         redisAPI.hgetall(CONFIGURATION).onSuccess(response -> {
             ProxyClientConfig proxyClientConfig = Json.decodeValue(response.get(JRP_CLIENT_CONFIG).toString(), ProxyClientConfig.class);
             proxyClientConfig.setRemote_proxies(list);

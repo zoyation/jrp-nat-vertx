@@ -1,6 +1,9 @@
 package com.tony.jrp.server.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.tony.jrp.common.model.ClientProxy;
+import com.tony.jrp.common.model.UserProxy;
+import io.vertx.core.http.ServerWebSocket;
 import lombok.Data;
 
 import java.sql.Timestamp;
@@ -11,6 +14,11 @@ import java.util.List;
  */
 @Data
 public class RegisterInfo {
+    /**
+     * websocket连接
+     */
+    @JsonIgnore
+    private ServerWebSocket webSocket;
     private String id;
     /**
      * 注册客户端外网主机
@@ -44,6 +52,10 @@ public class RegisterInfo {
      * 客户端穿透配置列表
      */
     private List<ClientProxy> proxies;
+    /**
+     * 用户端p2p访问信息，用于直连穿透。
+     */
+    private List<UserProxy> userProxies;
     /**
      * 注册时间
      */

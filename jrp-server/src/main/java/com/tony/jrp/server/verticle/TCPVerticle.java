@@ -4,6 +4,7 @@ import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
+import com.tony.jrp.common.utils.PortConverter;
 import com.tony.jrp.server.service.impl.SecurityService;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
@@ -15,7 +16,6 @@ import io.vertx.core.net.SocketAddress;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -35,7 +35,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
     @Override
     public void init() {
         int remotePort = clientProxy.getRemote_port();
-        byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
+        byte[] remotePortByte = PortConverter.getRemotePortByte(remotePort);
         // 创建TCP服务器
         NetServerOptions options = new NetServerOptions();
         options.setIdleTimeout(IDLE_TIMEOUT);
