@@ -63,10 +63,7 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      * 所有代理Verticle,key：注册端口（1024-49151），用户可注册用于特定服务。
      */
     private final Map<Integer, AbstractProtocolVerticle<?>> verticleMap = new ConcurrentHashMap<>();
-    /**
-     * P2P打洞Verticle部署ID映射：remotePort -> deploymentId
-     */
-    private final Map<Integer, String> p2pVerticleMap = new ConcurrentHashMap<>();
+  
     /**
      * 外网IPv4地址
      */
@@ -347,17 +344,5 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
         String ports = verticleMap.keySet().stream().map(Object::toString).collect(Collectors.joining(","));
         log.info("清理端口[{}]下所有代理缓存！", ports);
         verticleMap.clear();
-
-        // 清理P2P打洞Verticle
-        for (Map.Entry<Integer, String> entry : p2pVerticleMap.entrySet()) {
-            vertx.undeploy(entry.getValue(), result -> {
-                if (result.succeeded()) {
-                    log.info("已移除端口[{}]的P2P打洞Verticle", entry.getKey());
-                } else {
-                    log.warn("移除端口[{}]的P2P打洞Verticle失败", entry.getKey(), result.cause());
-                }
-            });
-        }
-        p2pVerticleMap.clear();
     }
 }
