@@ -740,7 +740,6 @@ public class ProxyClientManager implements InitializingBean {
 //                            log.info("返回消息到内网服务地址[{}]", p2pPacket.sender());
 //                            datagramSocket.send(p2pPacket.data(), p2pPacket.sender().port(), p2pPacket.sender().host());
 //                        });
-                        log.info("收到来自内网服务地址[{}]的数据", p2pPacket.sender());
                         Buffer data = p2pPacket.data();
                         JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
                         if (JRPMsgType.UDP_TUNNEL_KEEPALIVE == msgType) {
@@ -748,6 +747,7 @@ public class ProxyClientManager implements InitializingBean {
                             //内网可能收到也可能收不到，取决于网络类型
                             datagramSocket.send(KEEP_ALIVE_BUFFER, socketAddress.port(), socketAddress.host());
                         } else {
+                            log.info("收到来自内网服务地址[{}]的数据", p2pPacket.sender());
                             //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
                             //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
                             //外网访问端口，整数，比如1024
