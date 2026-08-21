@@ -1,6 +1,7 @@
 package com.tony.jrp.client.verticle;
 
 import com.tony.jrp.client.service.impl.SecurityService;
+import com.tony.jrp.client.utils.UdpFragmentUtil;
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.UserProxy;
@@ -53,7 +54,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             log.debug("[{}] 创建连接!", socketAddress.toString());
             String clientAddress = socketAddress.toString();
             // 请求唯一标识
-            int requestId = socketAddress.hashCode();
+            int requestId = requestIdGenerator.incrementAndGet();
             //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
             //String msgId = remotePort.toString().length() + remotePort.toString() + clientAddress.length() + clientAddress;
             //代理端口（int转byte,32位，4字节）+请求唯一标识（和clientAddress绑定的int整数,32位，4字节）
@@ -79,7 +80,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                         //请求头中添加原始请求IP
                         data = securityService.addHead(data.toString(), X_REAL_IP, clientAddress);
                     }
-                    datagramSocket.send(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data)
+                    UdpFragmentUtil.sendWithFragment(datagramSocket, requestId, Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data)
                             , p2pSocketAddress.port(), p2pSocketAddress.host());
                 }
             };
@@ -105,7 +106,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                     this.removeCacheAndClose(requestId);
                     log.debug("发送来自客户端[{}]的非HTTP初始化请求!", clientAddress);
                     this.cacheRequest(requestId, clientSocket);
-                    datagramSocket.send(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId)
+                    UdpFragmentUtil.sendWithFragment(datagramSocket, requestId, Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId)
                             , p2pSocketAddress.port(), p2pSocketAddress.host());
                 }
             });
@@ -137,19 +138,18 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
     public void backData(JRPMsgType msgType, Buffer msgId, Integer requestId, Buffer data) {
         NetSocket clientNetSocket = this.getRequest(requestId);
         if (clientNetSocket != null) {
-            SocketAddress remoteAddress = clientNetSocket.remoteAddress();
             if (JRPMsgType.CLOSE == msgType) {
-                log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", remoteAddress);
+                log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", p2pSocketAddress);
                 this.removeCacheAndClose(requestId);
             } else if (JRPMsgType.RESPONSE == msgType) {
-                log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", remoteAddress);
+                log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", p2pSocketAddress);
                 clientNetSocket.write(data);
                 if (clientNetSocket.writeQueueFull()) {
                     clientNetSocket.pause();
                     clientNetSocket.drainHandler(done -> clientNetSocket.resume());
                 }
             } else {
-                log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", remoteAddress, msgType);
+                log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", p2pSocketAddress, msgType);
             }
         } else if (JRPMsgType.CLOSE == msgType) {
             log.warn("收到内网代理服务返回的关闭消息，客户端[{}]连接已经失效，不做处理！", requestId);

@@ -1,6 +1,7 @@
 package com.tony.jrp.client.verticle;
 
 import com.tony.jrp.client.service.impl.SecurityService;
+import com.tony.jrp.client.utils.UdpFragmentUtil;
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.UserProxy;
 import io.vertx.core.MultiMap;
@@ -62,14 +63,19 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
         datagramSocket.handler(packet -> {
             SocketAddress socketAddress = packet.sender();
             log.debug("[{}] 收到UDP数据!", socketAddress.toString());
+            //本地监听端口收到的是用户原始UDP数据报，从未经过分片，无需重组（分片只发生在P2P通道上）
+            //注意：不能对用户数据调用assemble，否则用户数据首字节恰好等于分片类型码时会被误判丢弃
+            Buffer packetData = packet.data();
             //String clientAddress = socketAddress.toString();
             // 请求唯一标识
-            int requestId = socketAddress.hashCode();
+            int requestId = requestIdGenerator.incrementAndGet();
             this.cacheRequest(requestId, packet);
             requestIdTimestamps.put(requestId, System.currentTimeMillis());
             //代理端口（int转byte,32位，4字节）+请求唯一标识（和clientAddress绑定的int整数,32位，4字节）
             Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE).appendBytes(remotePortByte).appendBytes(ByteBuffer.allocate(4).putInt(requestId).array());
-            this.datagramSocket.send(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + packet.data().length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(packet.data())
+            //上行数据必须通过P2P打洞通道socket（super.datagramSocket）发送，
+            //否则源端口与本机打洞映射端口不一致，内网服务端sender校验会丢弃数据
+            UdpFragmentUtil.sendWithFragment(super.datagramSocket, requestId, Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + packetData.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(packetData)
                     , p2pSocketAddress.port(), p2pSocketAddress.host());
         });
         datagramSocket.listen(clientProxy.getLocal_port(), "0.0.0.0", (res) -> {
@@ -107,6 +113,8 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
      * 清理请求id缓存
      */
     private void cleanupExpiredRequests() {
+        //清理超时未完成的分片缓存
+        UdpFragmentUtil.cleanupExpired();
         long now = System.currentTimeMillis();
         requestIdTimestamps.entrySet().removeIf(entry ->
         {
@@ -125,7 +133,9 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
         log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", requestId);
         DatagramPacket datagramPacket = this.getRequest(requestId);
         if (datagramPacket != null) {
-            datagramSocket.send(data, p2pSocketAddress.port(), p2pSocketAddress.host());
+            //内网服务端响应数据应返回给原始请求方（用户），而不是P2P对端（内网服务端）
+            SocketAddress sender = datagramPacket.sender();
+            UdpFragmentUtil.sendWithFragment(datagramSocket, requestId, data, sender.port(), sender.host());
         }
     }
 

@@ -3,6 +3,7 @@ package com.tony.jrp.client.verticle;
 import com.tony.jrp.client.model.ProxyRequest;
 import com.tony.jrp.client.model.UdpRequest;
 import com.tony.jrp.client.service.impl.SecurityService;
+import com.tony.jrp.client.utils.UdpFragmentUtil;
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.enums.ProxyProto;
 import com.tony.jrp.common.enums.ServiceType;
@@ -109,7 +110,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
             SocketAddress socketAddress = netSocket.remoteAddress();
             log.debug("收到代理连接，客户端地址[{}]，连接类型[{}]!", socketAddress.toString(), clientProxy.getType().name());
             // 请求唯一标识
-            int requestId = socketAddress.hashCode();
+            int requestId = requestIdGenerator.incrementAndGet();
             // 消息唯一标识 端口+请求ID，6字节
             Buffer msgId = Buffer.buffer(MSG_BYTE_SIZE)
                     .appendBytes(remotePortByte)
@@ -252,7 +253,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                         //通过认证的代理请求，尝试和内网建立连接转发数据
                         Buffer httpData = securityService.removeHttpProxy(bufferStr);
                         //重新设置tcp数据接收处理器
-                        socket.handler(httDataHandler(msgId));
+                        socket.handler(httDataHandler(msgId, requestId));
                         //转发请求
                         log.debug("转发来自[{}]的正向代理穿透HTTP请求到内网客户端！", remoteAddress);
                         this.sendConnectInfo(socket, requestId, msgId, httpsRequest ? ProxyProto.HTTPS : ProxyProto.HTTP, targetHost, null, ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) targetPort).array(), httpData);
@@ -517,7 +518,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
         ProxyRequest proxyRequest = ProxyRequest.createTcpRequest(clientSocket, proxyProto, targetHost, dstIP, targetPort);
         this.cacheRequest(requestId, proxyRequest);
         //转发连接信息给穿透客户端
-        this.datagramSocket.send(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
+        UdpFragmentUtil.sendWithFragment(this.datagramSocket, requestId, Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
                 .appendByte(JRPMsgType.RECEIVE.getCode())
                 .appendBuffer(msgId)
                 .appendBuffer(target).appendBuffer(data), p2pSocketAddress.port(), p2pSocketAddress.host());
@@ -532,10 +533,10 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
     /**
      * 数据处理器：接收和转发用户端数据到内网代理程序
      */
-    private Handler<Buffer> dataHandler(Buffer msgId) {
+    private Handler<Buffer> dataHandler(Buffer msgId, Integer requestId) {
         return buffer -> {
             // 将代理客户端加入管理
-            datagramSocket.send(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + buffer.length())
+            UdpFragmentUtil.sendWithFragment(datagramSocket, requestId, Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + buffer.length())
                     .appendByte(JRPMsgType.RECEIVE.getCode())
                     .appendBuffer(msgId)
                     .appendBuffer(buffer), p2pSocketAddress.port(), p2pSocketAddress.host());
@@ -545,7 +546,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
     /**
      * http数据处理器：接收和转发用户端数据到内网代理程序
      */
-    private Handler<Buffer> httDataHandler(Buffer msgId) {
+    private Handler<Buffer> httDataHandler(Buffer msgId, int requestId) {
         return buffer -> {
             String bufferStr = buffer.toString();
             Buffer sendBuffer;
@@ -555,7 +556,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 //非首次请求数据
                 sendBuffer = buffer;
             }
-            datagramSocket.send(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + sendBuffer.length())
+            UdpFragmentUtil.sendWithFragment(datagramSocket, requestId, Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + sendBuffer.length())
                     .appendByte(JRPMsgType.RECEIVE.getCode())
                     .appendBuffer(msgId)
                     .appendBuffer(sendBuffer), p2pSocketAddress.port(), p2pSocketAddress.host());
@@ -845,7 +846,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 this.cacheRequest(requestId, request);
             }
             //转发信息到穿透客户端
-            this.datagramSocket.send(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
+            UdpFragmentUtil.sendWithFragment(this.datagramSocket, requestId, Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + target.length())
                     .appendByte(JRPMsgType.RECEIVE.getCode())
                     .appendBuffer(msgId)
                     .appendBuffer(target).appendBuffer(data), p2pSocketAddress.port(), p2pSocketAddress.host());
@@ -950,7 +951,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                 //SOCK5_TCP或SOCK4_TCP穿透客户端创建TCP连接成功后会返回空消息(realData.length()==0)
                 if (data.length() == 0) {
                     //接收和转发来自用户端的数据
-                    clientNetSocket.handler(dataHandler(msgId));
+                    clientNetSocket.handler(dataHandler(msgId, requestId));
                     switch (proxyProto) {
                         case SOCK5_TCP:
                             // 发送socks5穿透隧道创建成功响应

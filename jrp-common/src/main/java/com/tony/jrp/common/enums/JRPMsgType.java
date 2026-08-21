@@ -17,6 +17,7 @@ import java.util.Arrays;
  * UDP_TUNNEL_REQUEST: 打洞请求
  * UDP_TUNNEL_RESPONSE: 打洞响应
  * UDP_TUNNEL_KEEPALIVE: 打洞成功
+ * FRAGMENT: UDP数据报分片传输
  */
 @Getter
 public enum JRPMsgType implements Serializable {
@@ -29,7 +30,8 @@ public enum JRPMsgType implements Serializable {
     PROXIES_UPDATE_RESULT((byte) 0X06),
     UDP_TUNNEL_REQUEST((byte) 0X07),
     UDP_TUNNEL_RESPONSE((byte) 0X08),
-    UDP_TUNNEL_KEEPALIVE((byte) 0X09);
+    UDP_TUNNEL_KEEPALIVE((byte) 0X09),
+    FRAGMENT((byte) 0X0A);
     private final byte code;
     private final byte[] codeArray;
     public static final int TYPE_LEN = 1;

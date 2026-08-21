@@ -10,6 +10,7 @@ import io.vertx.core.net.SocketAddress;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 穿透协议服务基础类
@@ -18,7 +19,7 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
     /**
      * 读写超时时间，单位秒
      */
-    public static final int IDLE_TIMEOUT = 10;
+    public static final int IDLE_TIMEOUT = 60;
     /**
      * 数据大小，默认256KB
      */
@@ -50,7 +51,20 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      * 请求ID池，缓存请求信息
      */
     private final Map<Integer, T> clientSocketMap = new ConcurrentHashMap<>();
+    /**
+     * 定义请求ID生成器，可复用
+     */
+    protected final AtomicInteger requestIdGenerator = new AtomicInteger(0);
 
+    /**
+     * 构造函数
+     *
+     * @param ipv4            内网IPV4地址
+     * @param serverSocket    UDP服务器
+     * @param socketAddress   P2P服务器地址
+     * @param securityService 安全服务
+     * @param clientProxy     客户端代理信息
+     */
     protected AbstractProtocolVerticle(String ipv4, DatagramSocket serverSocket, SocketAddress socketAddress, SecurityService securityService, UserProxy clientProxy) {
         this.ipv4 = ipv4;
         this.datagramSocket = serverSocket;

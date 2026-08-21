@@ -7,6 +7,7 @@ import com.tony.jrp.client.handler.ForwardProxyHandler;
 import com.tony.jrp.client.handler.TcpReverseProxyHandler;
 import com.tony.jrp.client.handler.UdpReverseProxyHandler;
 import com.tony.jrp.client.service.IConfigService;
+import com.tony.jrp.client.utils.UdpFragmentUtil;
 import com.tony.jrp.client.verticle.AbstractProtocolVerticle;
 import com.tony.jrp.client.verticle.ForwardProxyVerticle;
 import com.tony.jrp.client.verticle.TCPVerticle;
@@ -130,6 +131,12 @@ public class ProxyClientManager implements InitializingBean {
     //registerWebSocket为null，未注册
     private volatile WebSocket registerWebSocket = null;
     private volatile Long pingTimerId = null;
+    /**
+     * 全局UDP分片重组缓存清理定时器id。
+     * 分片缓存清理不能只依赖UDPVerticle的定时器（无UDP代理时不会启动），
+     * 否则未完成的分片缓存永不清理，导致内存泄漏且残留会话ID撞号丢数据。
+     */
+    private volatile Long fragmentCleanupTimerId = null;
     private final AtomicInteger reconnectionTimes = new AtomicInteger(0);
     private String errorMessage = "";
     Map<Integer, ClientProxy> remotePortClientMap = new ConcurrentHashMap<>();
@@ -416,7 +423,7 @@ public class ProxyClientManager implements InitializingBean {
         List<ClientProxy> registerProxies = newConfig.getRemote_proxies();
         ClientRegister register = new ClientRegister();
         register.setId(ClientIdUtils.getClientId());
-//        register.setId("1");
+        register.setId("1");
         register.setToken(properties.getToken());
         register.setUsername(properties.getUsername());
         register.setPassword(properties.getPassword());
@@ -530,6 +537,10 @@ public class ProxyClientManager implements InitializingBean {
                                 if (registerResult.isSuccess()) {
                                     //初始化端口转发穿透服务处理器
                                     this.closeAndCreateProxyHandler();
+                                    //启动全局分片重组缓存清理，确保无UDP代理Verticle时分片缓存也能被清理
+                                    if (fragmentCleanupTimerId == null) {
+                                        fragmentCleanupTimerId = vertx.setPeriodic(1000, id -> UdpFragmentUtil.cleanupExpired());
+                                    }
                                     try {
                                         //初始化支持P2P穿透的内网穿透，用于管理P2P客户端连接
                                         this.initClientP2P(register.getProxies().stream().filter(r -> r.isEnable() && r.isEnable_p2p()).collect(Collectors.toList()));
@@ -609,14 +620,15 @@ public class ProxyClientManager implements InitializingBean {
                             DatagramSocket datagramSocket = remotePortUdpSocketMap.getOrDefault(remotePort, vertx.createDatagramSocket());
                             remotePortUdpSocketMap.put(remotePort, datagramSocket);
                             datagramSocket.handler(packet -> {
-                                log.info("收到P2P用户端[{}]UDP数据包：{}", packet.sender(), packet.data().toString());
                                 if (packet.data().getByte(0) == JRPMsgType.UDP_TUNNEL_KEEPALIVE.getCode()) {
+                                    log.debug("收到P2P用户端[{}]UDP心跳包", packet.sender());
+                                    remotePortSenderMap.put(remotePort, packet.sender());
                                     vertx.setTimer(KEEPALIVE_DELAY, id -> {
                                         datagramSocket.send(KEEP_ALIVE_BUFFER, packet.sender().port(), packet.sender().host());
                                     });
-                                    remotePortSenderMap.put(remotePort, packet.sender());
                                 } else {
-                                    this.receiveP2PData(packet);
+                                    log.debug("收到P2P用户端[{}]UDP数据包", packet.sender());
+                                    this.receiveP2PData(datagramSocket, packet);
                                 }
                             });
                             log.info("发送udp消息到注册地址（信令服务器）：{}", registerHost + ":" + registerPort);
@@ -740,10 +752,14 @@ public class ProxyClientManager implements InitializingBean {
 //                            log.info("返回消息到内网服务地址[{}]", p2pPacket.sender());
 //                            datagramSocket.send(p2pPacket.data(), p2pPacket.sender().port(), p2pPacket.sender().host());
 //                        });
-                        Buffer data = p2pPacket.data();
+                        //分片数据重组，未接收完整时等待后续分片
+                        Buffer data = UdpFragmentUtil.assemble(datagramSocket, p2pPacket.sender(), p2pPacket.data());
+                        if (data == null) {
+                            return;
+                        }
                         JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
                         if (JRPMsgType.UDP_TUNNEL_KEEPALIVE == msgType) {
-                            log.info("发送心跳保活消息到内网服务地址：{}", socketAddress);
+                            log.debug("发送心跳保活消息到内网服务地址：{}", socketAddress);
                             //内网可能收到也可能收不到，取决于网络类型
                             datagramSocket.send(KEEP_ALIVE_BUFFER, socketAddress.port(), socketAddress.host());
                         } else {
@@ -772,13 +788,17 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     /**
-     * 处理P2P穿透数据
+     * 收到P2P用户端数据，处理P2P穿透数据
      *
      * @param packet
      */
-    private void receiveP2PData(DatagramPacket packet) {
+    private void receiveP2PData(DatagramSocket datagramSocket, DatagramPacket packet) {
         //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为
-        Buffer buffer = packet.data();
+        //分片数据重组，未接收完整时等待后续分片
+        Buffer buffer = UdpFragmentUtil.assemble(datagramSocket, packet.sender(), packet.data());
+        if (buffer == null) {
+            return;
+        }
         byte msgType = buffer.getByte(0);
         JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
         //代理端口
@@ -802,7 +822,6 @@ public class ProxyClientManager implements InitializingBean {
                     log.warn("未找到代理端口[{}]对应的客户端配置！", remotePort);
                     return;
                 }
-                DatagramSocket datagramSocket = remotePortUdpSocketMap.get(remotePort);
                 SocketAddress sender = packet.sender();
                 SocketAddress cacheSender = remotePortSenderMap.get(remotePort);
                 if (cacheSender == null) {
@@ -813,7 +832,7 @@ public class ProxyClientManager implements InitializingBean {
                     log.warn("代理端口[{}]对应的客户端发送者[{}]与当前发送者[{}]不一致，可能是非法请求！", remotePort, cacheSender, sender);
                     return;
                 }
-                Consumer<Buffer> bufferConsumer = (Buffer backData) -> datagramSocket.send(backData, sender.port(), sender.host());
+                Consumer<Buffer> bufferConsumer = (Buffer backData) -> UdpFragmentUtil.sendWithFragment(datagramSocket, requestId, backData, sender.port(), sender.host());
                 switch (proxy.getType()) {
                     case HTTP:
                     case HTTPS:
