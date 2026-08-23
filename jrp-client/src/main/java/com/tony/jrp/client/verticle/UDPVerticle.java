@@ -4,18 +4,12 @@ import com.tony.jrp.client.service.impl.SecurityService;
 import com.tony.jrp.client.utils.UdpFragmentUtil;
 import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.UserProxy;
-import io.vertx.core.MultiMap;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramPacket;
 import io.vertx.core.datagram.DatagramSocket;
 import io.vertx.core.datagram.DatagramSocketOptions;
 import io.vertx.core.http.HttpServer;
-import io.vertx.core.http.HttpServerOptions;
-import io.vertx.core.http.HttpServerRequest;
-import io.vertx.core.http.HttpServerResponse;
-import io.vertx.core.net.HostAndPort;
 import io.vertx.core.net.SocketAddress;
-import io.vertx.ext.web.Router;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
@@ -28,7 +22,6 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Slf4j
 public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
-    public static final String AUTHORIZATION = "Authorization";
     /**
      * udp请求处理对象
      */
@@ -85,23 +78,6 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
                 log.error("端口[{}]]UDP内网穿透代理服务启动失败：{}", clientProxy.getLocal_port(), res.cause().getMessage(), res.cause());
             }
         });
-        httpServer = vertx.createHttpServer(new HttpServerOptions().setReusePort(true));
-        Router router = Router.router(vertx);
-        router.get("/").handler(context -> {
-            HttpServerRequest request = context.request();
-            HttpServerResponse response = context.response();
-            //尝试HTTP用户名密码信息验证
-            HostAndPort authority = request.authority();
-            log.debug("UDP客户端[{}]请求验证通过，返回成功提示信息!", authority);
-            MultiMap headers = response.headers();
-            headers.set("Content-Type", "text/html; charset=utf-8");
-            headers.set("Cache-Control", "no-cache, no-store, must-revalidate");
-            headers.set("Pragma", "no-cache");
-            headers.set("Expires", "0");
-            response.end(Buffer.buffer("UDP请求用户名密码验证通过!"));
-        });
-        httpServer.requestHandler(router);
-        httpServer.listen(remotePort);
         cleanUpId = vertx.setPeriodic(1000, (id) -> this.cleanupExpiredRequests());
     }
 
@@ -144,8 +120,10 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
         log.info("清理端口[{}]下代理和缓存！", clientProxy.getRemote_port());
         vertx.cancelTimer(cleanUpId);
         requestIdTimestamps.clear();
-        //datagramSocket.close();
-        //httpServer.close();
+        //关闭本地监听UDP服务
+        if (datagramSocket != null) {
+            datagramSocket.close();
+        }
         super.stop();
     }
 }

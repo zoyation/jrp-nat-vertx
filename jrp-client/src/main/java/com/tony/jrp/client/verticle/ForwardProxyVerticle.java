@@ -1017,7 +1017,9 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
     @Override
     public void stop() throws Exception {
         log.info("关闭端口[{}]下正向代理服务并清理缓存！", clientProxy.getRemote_port());
-        server.close();
+        if (server != null) {
+            server.close();
+        }
         //clientSocketMap.clear();
         super.stop();
     }

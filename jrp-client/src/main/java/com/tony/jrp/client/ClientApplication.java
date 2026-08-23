@@ -1,7 +1,6 @@
 package com.tony.jrp.client;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.tony.jrp.client.config.ProxyClientProperties;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Launcher;
 import io.vertx.core.Promise;
@@ -10,7 +9,6 @@ import io.vertx.core.json.jackson.DatabindCodec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.ConfigurableApplicationContext;
 
 import java.nio.charset.Charset;
 import java.util.Arrays;
@@ -58,20 +56,6 @@ public class ClientApplication extends AbstractVerticle {
 
                 // 6. 警告日志是否打印线程堆栈（性能考虑，生产环境可关闭）
                 options.setWarningExceptionTime(5000000000L); // 5秒后打印堆栈
-
-                // 7. 集群相关配置（如果启用集群）
-                // options.setClustered(true);
-                // options.setClusterHost("localhost");
-                // options.setClusterPort(0); // 自动选择端口
-
-                // 8. 文件系统配置
-                // options.setFileResolverCachingEnabled(true); // 启用文件缓存
-
-                // 9. HA配置（高可用）
-                // options.setHAEnabled(true);
-                // options.setHAGroup("my-ha-group");
-                // options.setQuorumSize(2);
-
                 super.beforeStartingVertx(options);
             }
         }.dispatch(list.toArray(new String[0]));
@@ -114,7 +98,7 @@ public class ClientApplication extends AbstractVerticle {
         log.info("========================================");
 
         vertx.executeBlocking(() -> {
-             SpringApplication.run(ClientApplication.class, processArgs().toArray(new String[]{}));
+            SpringApplication.run(ClientApplication.class, processArgs().toArray(new String[]{}));
             log.info("JRP 客户端启动成功！");
             startPromise.complete();
             return true;

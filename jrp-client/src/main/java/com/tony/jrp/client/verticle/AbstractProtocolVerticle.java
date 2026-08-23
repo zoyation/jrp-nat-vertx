@@ -81,6 +81,10 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
     @Override
     public void stop() throws Exception {
         super.stop();
+        //关闭P2P打洞DatagramSocket
+        if (datagramSocket != null) {
+            datagramSocket.close();
+        }
     }
 
     /**

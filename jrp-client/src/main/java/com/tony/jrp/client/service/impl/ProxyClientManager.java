@@ -107,8 +107,16 @@ public class ProxyClientManager implements InitializingBean {
      */
     public static final int PING_DELAY = 2000;
     public static final String JRP_CLIENT_CONFIG = "jrp-client-config";
-    public static final int KEEPALIVE_DELAY = 2000;
+    public static final int KEEPALIVE_DELAY = 1000;
     public static final Buffer KEEP_ALIVE_BUFFER = Buffer.buffer().appendByte(JRPMsgType.UDP_TUNNEL_KEEPALIVE.getCode());
+    /**
+     * 用户端P2P心跳超时时间（毫秒），超过该时间未收到内网服务心跳，认为打洞链路失效，触发重新打洞
+     */
+    public static final int P2P_HEARTBEAT_TIMEOUT = 30 * 1000;
+    /**
+     * 用户端P2P心跳超时检查间隔（毫秒）
+     */
+    public static final int P2P_HEARTBEAT_CHECK_DELAY = 5 * 1000;
     @Autowired
     protected Vertx vertx;
     /**
@@ -139,55 +147,49 @@ public class ProxyClientManager implements InitializingBean {
     private volatile Long fragmentCleanupTimerId = null;
     private final AtomicInteger reconnectionTimes = new AtomicInteger(0);
     private String errorMessage = "";
+    /**
+     * 远程端口和客户端映射
+     */
     Map<Integer, ClientProxy> remotePortClientMap = new ConcurrentHashMap<>();
+    /**
+     * 远程端口和UDP Socket映射
+     */
     Map<Integer, DatagramSocket> remotePortUdpSocketMap = new ConcurrentHashMap<>();
+    /**
+     * 远程端口和发送地址映射
+     */
     Map<Integer, SocketAddress> remotePortSenderMap = new ConcurrentHashMap<>();
+    /**
+     * 服务类型和处理器映射
+     */
     private final Map<ServiceType, AbstractProxyHandler> handlerMap = new ConcurrentHashMap<>();
     /**
      * 知名端口（0-1023）‌：这些端口通常被系统服务或标准应用协议占用
      * 动态/私有端口（49152-65535）：这些端口由操作系统临时分配给客户端进程，用于短期通信，例如浏览器发起的UDP请求。
      * 注册端口（1024-49151）‌：这些端口可由用户进程或应用程序动态分配，常见于自定义服务或特定软件。
-     * 所有代理Verticle,key：注册端口（1024-49151），用户可注册用于特定服务。
+     * 用户端P2P穿透Verticle部署ID映射，key：本地监听端口。
      */
-    private final Map<Integer, AbstractProtocolVerticle<?>> verticleMap = new ConcurrentHashMap<>();
+    private final Map<Integer, String> verticleDeploymentIdMap = new ConcurrentHashMap<>();
+    /**
+     * 用户端P2P打洞DatagramSocket映射，key：本地监听端口。
+     */
+    private final Map<Integer, DatagramSocket> userP2PUdpSocketMap = new ConcurrentHashMap<>();
+    /**
+     * 用户端P2P心跳超时检查定时器id
+     */
+    private volatile Long p2pHeartbeatTimerId = null;
+    /**
+     * 用户端P2P最后心跳时间，key：本地监听端口，value：最后收到心跳的时间戳（毫秒）
+     */
+    private final Map<Integer, Long> p2pLastHeartbeatMap = new ConcurrentHashMap<>();
+    /**
+     * 用户端P2P代理配置，key：本地监听端口，供心跳超时重新打洞使用
+     */
+    private final Map<Integer, UserProxy> userProxyMap = new ConcurrentHashMap<>();
     /**
      * HTTP请求行路径提取正则
      */
     private static final Pattern HTTP_PATH_PATTERN = Pattern.compile("^\\S+\\s+(\\S+)\\s+", Pattern.CASE_INSENSITIVE);
-
-    /**
-     * 解析proxy_pass地址，提取host、port、path。
-     * 支持格式如：http://host:port/path、https://host/path、host:port/path 等。
-     * 类似nginx的proxy_pass，当包含路径时，转发请求会加上该路径前缀。
-     *
-     * @param proxy     需要设置解析结果的ClientProxy对象
-     * @param proxyPass 原始proxy_pass地址
-     */
-    private static void parseProxyPass(ClientProxy proxy, String proxyPass) {
-        proxy.setProxy_pass(proxyPass);
-        String lowerCasePass = proxyPass.toLowerCase().trim();
-        boolean https = lowerCasePass.startsWith("https");
-        proxy.setHttps(https);
-        // 去掉协议前缀
-        String hostPortPath = lowerCasePass.replaceAll("^https?://", "");
-        // 分离host:port和path（取第一个/作为路径起始）
-        String path = "";
-        int slashIdx = hostPortPath.indexOf("/");
-        if (slashIdx > 0) {
-            path = hostPortPath.substring(slashIdx);
-            hostPortPath = hostPortPath.substring(0, slashIdx);
-        }
-        proxy.setPath(path);
-        // 解析host和port
-        int index = hostPortPath.lastIndexOf(":");
-        if (index > 0) {
-            proxy.setHost(hostPortPath.substring(0, index));
-            proxy.setPort(Integer.parseInt(hostPortPath.substring(index + 1)));
-        } else {
-            proxy.setHost(hostPortPath);
-            proxy.setPort(https ? 443 : 80);
-        }
-    }
 
     @Data
     private static class RegisterStatus {
@@ -207,6 +209,8 @@ public class ProxyClientManager implements InitializingBean {
         private RegisterStatus(Boolean success, String message, String remoteHost) {
             this.success = success;
             this.message = message;
+
+
             this.remoteHost = remoteHost;
         }
 
@@ -268,10 +272,50 @@ public class ProxyClientManager implements InitializingBean {
      */
     private void closeProxyHandler() throws IOException {
         for (Map.Entry<ServiceType, AbstractProxyHandler> entry : handlerMap.entrySet()) {
-            log.info("停止[{}]穿透转发服务", entry.getKey().name());
+            log.info("停止转发穿透服务[{}]", entry.getKey().name());
             entry.getValue().close();
         }
         handlerMap.clear();
+        for (Map.Entry<Integer, DatagramSocket> entry : remotePortUdpSocketMap.entrySet()) {
+            log.info("停止P2P穿透服务[{}]", entry.getKey());
+            entry.getValue().close();
+        }
+        remotePortUdpSocketMap.clear();
+        //关闭用户端P2P穿透服务（Verticle和DatagramSocket）
+        closeUserP2P();
+    }
+
+    /**
+     * 关闭用户端P2P穿透服务，清理P2P打洞Verticle和DatagramSocket：
+     * 1.卸载已部署的穿透Verticle，触发Verticle#stop关闭其持有的NetServer、DatagramSocket等资源；
+     * 2.关闭打洞阶段（未成功部署Verticle）遗留的DatagramSocket，DatagramSocket#close为幂等操作，重复关闭安全。
+     */
+    private void closeUserP2P() {
+        //取消用户端P2P心跳超时检查定时器
+        if (p2pHeartbeatTimerId != null) {
+            log.info("取消用户端P2P心跳超时检查定时器:{}", p2pHeartbeatTimerId);
+            vertx.cancelTimer(p2pHeartbeatTimerId);
+            p2pHeartbeatTimerId = null;
+        }
+        //清空用户端P2P心跳时间记录和配置映射
+        p2pLastHeartbeatMap.clear();
+        userProxyMap.clear();
+        //卸载并停止用户端P2P穿透Verticle
+        for (Map.Entry<Integer, String> entry : verticleDeploymentIdMap.entrySet()) {
+            log.info("停止用户端P2P穿透服务[{}]", entry.getKey());
+            vertx.undeploy(entry.getValue()).onComplete(r -> {
+                if (r.failed()) {
+                    log.error("停止用户端P2P穿透服务[{}]失败：{}", entry.getKey(), r.cause().getMessage(), r.cause());
+                }
+            });
+        }
+        verticleDeploymentIdMap.clear();
+        //关闭用户端P2P打洞DatagramSocket
+        for (Map.Entry<Integer, DatagramSocket> entry : userP2PUdpSocketMap.entrySet()) {
+            log.info("停止用户端P2P穿透UDP服务[{}]", entry.getKey());
+            entry.getValue().close();
+        }
+        userP2PUdpSocketMap.clear();
     }
 
     private HttpServer startServer(ProxyClientConfig newConfig) {
@@ -395,6 +439,69 @@ public class ProxyClientManager implements InitializingBean {
         }
     }
 
+    private ClientRegister getClientRegister(ProxyClientConfig newConfig) {
+        List<ClientProxy> registerProxies = newConfig.getRemote_proxies();
+        ClientRegister register = new ClientRegister();
+        register.setId(ClientIdUtils.getClientId());
+        register.setId("2");
+        register.setToken(properties.getToken());
+        register.setUsername(properties.getUsername());
+        register.setPassword(properties.getPassword());
+        for (ClientProxy proxy : registerProxies) {
+            //格式 host:port
+            String proxyPass = proxy.getProxy_pass();
+            if (StringUtils.hasText(proxyPass)) {
+                parseProxyPass(proxy, proxyPass);
+            }
+            // 解析路由规则的proxy_pass
+            if (proxy.getRoutes() != null) {
+                for (RouteRule route : proxy.getRoutes()) {
+                    String routePass = route.getProxy_pass();
+                    if (StringUtils.hasText(routePass)) {
+                        parseProxyPass(route, routePass);
+                    }
+                }
+            }
+        }
+        register.setProxies(registerProxies);
+        register.setUserProxies(newConfig.getUser_proxies());
+        return register;
+    }
+
+    /**
+     * 解析proxy_pass地址，提取host、port、path。
+     * 支持格式如：http://host:port/path、https://host/path、host:port/path 等。
+     * 类似nginx的proxy_pass，当包含路径时，转发请求会加上该路径前缀。
+     *
+     * @param proxy     需要设置解析结果的ClientProxy对象
+     * @param proxyPass 原始proxy_pass地址
+     */
+    private static void parseProxyPass(ClientProxy proxy, String proxyPass) {
+        proxy.setProxy_pass(proxyPass);
+        String lowerCasePass = proxyPass.toLowerCase().trim();
+        boolean https = lowerCasePass.startsWith("https");
+        proxy.setHttps(https);
+        // 去掉协议前缀
+        String hostPortPath = lowerCasePass.replaceAll("^https?://", "");
+        // 分离host:port和path（取第一个/作为路径起始）
+        String path = "";
+        int slashIdx = hostPortPath.indexOf("/");
+        if (slashIdx > 0) {
+            path = hostPortPath.substring(slashIdx);
+            hostPortPath = hostPortPath.substring(0, slashIdx);
+        }
+        proxy.setPath(path);
+        // 解析host和port
+        int index = hostPortPath.lastIndexOf(":");
+        if (index > 0) {
+            proxy.setHost(hostPortPath.substring(0, index));
+            proxy.setPort(Integer.parseInt(hostPortPath.substring(index + 1)));
+        } else {
+            proxy.setHost(hostPortPath);
+            proxy.setPort(https ? 443 : 80);
+        }
+    }
+
     /**
      * 开始注册
      *
@@ -419,34 +526,6 @@ public class ProxyClientManager implements InitializingBean {
         }
     }
 
-    private ClientRegister getClientRegister(ProxyClientConfig newConfig) {
-        List<ClientProxy> registerProxies = newConfig.getRemote_proxies();
-        ClientRegister register = new ClientRegister();
-        register.setId(ClientIdUtils.getClientId());
-        register.setId("1");
-        register.setToken(properties.getToken());
-        register.setUsername(properties.getUsername());
-        register.setPassword(properties.getPassword());
-        for (ClientProxy proxy : registerProxies) {
-            //格式 host:port
-            String proxyPass = proxy.getProxy_pass();
-            if (StringUtils.hasText(proxyPass)) {
-                parseProxyPass(proxy, proxyPass);
-            }
-            // 解析路由规则的proxy_pass
-            if (proxy.getRoutes() != null) {
-                for (RouteRule route : proxy.getRoutes()) {
-                    String routePass = route.getProxy_pass();
-                    if (StringUtils.hasText(routePass)) {
-                        parseProxyPass(route, routePass);
-                    }
-                }
-            }
-        }
-        register.setProxies(registerProxies);
-        register.setUserProxies(newConfig.getUser_proxies());
-        return register;
-    }
 
     /**
      * 注册处理器
@@ -611,34 +690,10 @@ public class ProxyClientManager implements InitializingBean {
                             receiveData(remotePort, webSocket, buffer, msgType);
                             break;
                         }
-                        case UDP_TUNNEL_REQUEST:
-                            //发送外网端口号到注册端口，服务器收到后可和注册配置关联起来
-                            String userRemoteAddress = buffer.getBuffer(TYPE_PORT_LEN, buffer.length()).toString();
-                            String userRemoteHost = userRemoteAddress.substring(0, userRemoteAddress.indexOf(":"));
-                            int userRemotePort = Integer.parseInt(userRemoteAddress.substring(userRemoteAddress.indexOf(":") + 1));
-                            log.info("收到用户端打洞后的外网地址：{}", userRemoteAddress);
-                            DatagramSocket datagramSocket = remotePortUdpSocketMap.getOrDefault(remotePort, vertx.createDatagramSocket());
-                            remotePortUdpSocketMap.put(remotePort, datagramSocket);
-                            datagramSocket.handler(packet -> {
-                                if (packet.data().getByte(0) == JRPMsgType.UDP_TUNNEL_KEEPALIVE.getCode()) {
-                                    log.debug("收到P2P用户端[{}]UDP心跳包", packet.sender());
-                                    remotePortSenderMap.put(remotePort, packet.sender());
-                                    vertx.setTimer(KEEPALIVE_DELAY, id -> {
-                                        datagramSocket.send(KEEP_ALIVE_BUFFER, packet.sender().port(), packet.sender().host());
-                                    });
-                                } else {
-                                    log.debug("收到P2P用户端[{}]UDP数据包", packet.sender());
-                                    this.receiveP2PData(datagramSocket, packet);
-                                }
-                            });
-                            log.info("发送udp消息到注册地址（信令服务器）：{}", registerHost + ":" + registerPort);
-                            datagramSocket.send(Buffer.buffer().appendByte(JRPMsgType.UDP_TUNNEL_RESPONSE.getCode()).appendBytes(PortConverter.getRemotePortByte(remotePort)), registerPort, registerHost);
-                            //用户端外网ip和端口收到上面信令服务器转发的消息后会访问当前服务的外网地址，这儿延迟1秒发送，确保用户端收到并发送udp消息到当前服务外网地址后才发送端口号给用户端，避免用户端收到端口号后丢弃数据包导致打洞失败
-                            vertx.setTimer(KEEPALIVE_DELAY, id -> {
-                                log.info("发送udp打洞保活消息到用户端地址：{}", userRemoteAddress);
-                                datagramSocket.send(KEEP_ALIVE_BUFFER, userRemotePort, userRemoteHost);
-                            });
+                        case UDP_TUNNEL_REQUEST: {
+                            udpTunnelRequest(buffer, remotePort);
                             break;
+                        }
                     }
                 });
 
@@ -679,6 +734,7 @@ public class ProxyClientManager implements InitializingBean {
                 //关闭socket，避免超时重复注册时导致端口占用错误
                 WebSocket webSocket = currentWebSocket.get();
                 if (webSocket != null) {
+                    log.warn("注册超时，关闭websocket！");
                     webSocket.close();
                 }
             }
@@ -687,110 +743,232 @@ public class ProxyClientManager implements InitializingBean {
     }
 
     /**
+     * udp打洞请求
+     *
+     * @param buffer     udp打洞请求消息
+     * @param remotePort udp打洞请求消息中的远程端口
+     */
+    private void udpTunnelRequest(Buffer buffer, Integer remotePort) {
+        //发送外网端口号到注册端口，服务器收到后可和注册配置关联起来
+        String userRemoteAddress = buffer.getBuffer(TYPE_PORT_LEN, buffer.length()).toString();
+        String userRemoteHost = userRemoteAddress.substring(0, userRemoteAddress.indexOf(":"));
+        int userRemotePort = Integer.parseInt(userRemoteAddress.substring(userRemoteAddress.indexOf(":") + 1));
+        log.info("收到P2P用户端打洞外网地址：{}", userRemoteAddress);
+        DatagramSocket datagramSocket = remotePortUdpSocketMap.getOrDefault(remotePort, vertx.createDatagramSocket());
+        remotePortUdpSocketMap.put(remotePort, datagramSocket);
+        datagramSocket.handler(packet -> {
+            if (packet.data().getByte(0) == JRPMsgType.UDP_TUNNEL_KEEPALIVE.getCode()) {
+                log.debug("收到P2P用户端[{}]UDP心跳包", packet.sender());
+                remotePortSenderMap.put(remotePort, packet.sender());
+                vertx.setTimer(KEEPALIVE_DELAY, id -> {
+                    log.debug("返回UDP心跳包到P2P用户端[{}]", packet.sender());
+                    datagramSocket.send(KEEP_ALIVE_BUFFER, packet.sender().port(), packet.sender().host());
+                });
+            } else {
+                log.debug("收到P2P用户端[{}]UDP数据包", packet.sender());
+                this.receiveP2PData(datagramSocket, packet);
+            }
+        });
+        log.info("发送udp消息到注册地址（信令服务器）：{}", registerHost + ":" + registerPort);
+        datagramSocket.send(Buffer.buffer().appendByte(JRPMsgType.UDP_TUNNEL_RESPONSE.getCode()).appendBytes(PortConverter.getRemotePortByte(remotePort)), registerPort, registerHost);
+        //用户端外网ip和端口收到上面信令服务器转发的消息后会访问当前服务的外网地址，这儿延迟1秒发送，确保用户端收到并发送udp消息到当前服务外网地址后才发送端口号给用户端，避免用户端收到端口号后丢弃数据包导致打洞失败
+        vertx.setTimer(KEEPALIVE_DELAY, id -> {
+            log.info("发送udp打洞保活消息到P2P用户端地址：{}", userRemoteAddress);
+            datagramSocket.send(KEEP_ALIVE_BUFFER, userRemotePort, userRemoteHost);
+        });
+    }
+
+    /**
      * 初始化用户端P2P
      *
      * @param userProxyList 用户端P2P列表
      */
     private void initUserP2P(List<UserProxy> userProxyList) {
+        if (CollectionUtils.isEmpty(userProxyList)) {
+            return;
+        }
         for (UserProxy userProxy : userProxyList) {
             if (!userProxy.isEnable()) {
                 continue;
             }
             synchronized (ProxyClientManager.this) {
-                if (verticleMap.get(userProxy.getLocal_port()) != null) {
+                if (verticleDeploymentIdMap.containsKey(userProxy.getLocal_port())) {
                     log.warn("已存在端口为[{}]的代理信息，不做处理！", userProxy.getLocal_port());
                     continue;
                 }
             }
-            //启动本地监听，打洞成功后，发送外网端口号到注册端口
-            DatagramSocketOptions options = new DatagramSocketOptions().setReusePort(true).setReuseAddress(true);
-            DatagramSocket datagramSocket = vertx.createDatagramSocket(options);
-            datagramSocket.handler(packet -> {
-                Buffer buffer = packet.data();
-                JRPMsgType jrpMsgType = JRPMsgType.getByCode(buffer.getByte(0));
-                if (jrpMsgType == JRPMsgType.UDP_TUNNEL_RESPONSE) {
-                    //信令服务器返回的内网服务外网地址（IP:端口号）
-                    String lanRemoteAddress = buffer.getBuffer(JRPMsgType.TYPE_PORT_LEN, buffer.length()).toString();
-                    log.info("UDP打洞成功，内网服务的外网打洞地址：{}", lanRemoteAddress);
-                    //启动本地服务，处理内网穿透数据转发
-                    ServiceType serviceType = userProxy.getType();
-                    AbstractProtocolVerticle<?> verticle;
-                    String ipv4 = "127.0.0.1";
-                    String[] serviceRemoteAddress = lanRemoteAddress.split(":");
-                    SocketAddress socketAddress = SocketAddress.inetSocketAddress(Integer.parseInt(serviceRemoteAddress[1]), serviceRemoteAddress[0]);
-                    switch (serviceType) {
-                        case HTTPS:
-                        case HTTP:
-                        case TCP: {
-                            verticle = new TCPVerticle(ipv4, datagramSocket, socketAddress, securityService, userProxy);
-                            break;
-                        }
-                        case UDP: {
-                            verticle = new UDPVerticle(ipv4, datagramSocket, socketAddress, securityService, userProxy);
-                            break;
-                        }
-                        case HTTP_PROXY:
-                        case HTTPS_PROXY:
-                        case SOCKS4:
-                        case SOCKS5:
-                        case SMART_PROXY:
-                            verticle = new ForwardProxyVerticle(ipv4, datagramSocket, socketAddress, securityService, userProxy);
-                            break;
-                        default:
-                            throw new IllegalStateException("不支持穿透类型：" + serviceType.name() + "！");
+            //保存配置，供心跳超时重新打洞使用
+            userProxyMap.put(userProxy.getLocal_port(), userProxy);
+            createUserP2PSocket(userProxy);
+        }
+        //启动用户端P2P心跳超时检查，超过心跳超时时间未收到内网服务心跳，认为打洞链路失效，触发重新打洞
+        if (p2pHeartbeatTimerId == null) {
+            p2pHeartbeatTimerId = vertx.setPeriodic(P2P_HEARTBEAT_CHECK_DELAY, id -> checkP2PHeartbeatTimeout());
+            log.info("启动用户端P2P心跳超时检查定时器:{}", p2pHeartbeatTimerId);
+        }
+    }
+
+    /**
+     * 创建用户端P2P打洞DatagramSocket、设置数据接收handler并发送UDP打洞请求
+     *
+     * @param userProxy 用户端P2P配置
+     */
+    private void createUserP2PSocket(UserProxy userProxy) {
+        Integer localPort = userProxy.getLocal_port();
+        //启动本地监听，打洞成功后，发送外网端口号到注册端口
+        DatagramSocketOptions options = new DatagramSocketOptions().setReusePort(true).setReuseAddress(true);
+        DatagramSocket datagramSocket = vertx.createDatagramSocket(options);
+        //保存打洞DatagramSocket，WebSocket关闭时统一关闭
+        userP2PUdpSocketMap.put(localPort, datagramSocket);
+        //记录打洞发起时间，作为心跳超时检测的基准时间
+        p2pLastHeartbeatMap.put(localPort, System.currentTimeMillis());
+        datagramSocket.handler(packet -> {
+            Buffer buffer = packet.data();
+            JRPMsgType jrpMsgType = JRPMsgType.getByCode(buffer.getByte(0));
+            if (jrpMsgType == JRPMsgType.UDP_TUNNEL_RESPONSE) {
+                //打洞成功，链路已打通，更新心跳时间
+                p2pLastHeartbeatMap.put(localPort, System.currentTimeMillis());
+                //信令服务器返回的内网服务外网地址（IP:端口号）
+                String lanRemoteAddress = buffer.getBuffer(JRPMsgType.TYPE_PORT_LEN, buffer.length()).toString();
+                log.info("UDP打洞成功，内网服务的外网打洞地址：{}", lanRemoteAddress);
+                //启动本地服务，处理内网穿透数据转发
+                ServiceType serviceType = userProxy.getType();
+                AbstractProtocolVerticle<?> verticle;
+                String ipv4 = "127.0.0.1";
+                String[] serviceRemoteAddress = lanRemoteAddress.split(":");
+                SocketAddress socketAddress = SocketAddress.inetSocketAddress(Integer.parseInt(serviceRemoteAddress[1]), serviceRemoteAddress[0]);
+                switch (serviceType) {
+                    case HTTPS:
+                    case HTTP:
+                    case TCP: {
+                        verticle = new TCPVerticle(ipv4, datagramSocket, socketAddress, securityService, userProxy);
+                        break;
                     }
-                    vertx.deployVerticle(verticle)
-                            .onSuccess(id -> {
-                                verticleMap.put(userProxy.getLocal_port(), verticle);
-                                log.info("发送保活消息到内网服务地址：{}", socketAddress);
-                                //内网可能收到也可能收不到，取决于网络类型
-                                datagramSocket.send(KEEP_ALIVE_BUFFER, socketAddress.port(), socketAddress.host());
-                            })
-                            .onFailure(Throwable::printStackTrace);
-                    datagramSocket.handler(p2pPacket -> {
-//                        vertx.setTimer(2000, id -> {
-//                            log.info("返回消息到内网服务地址[{}]", p2pPacket.sender());
-//                            datagramSocket.send(p2pPacket.data(), p2pPacket.sender().port(), p2pPacket.sender().host());
-//                        });
-                        //分片数据重组，未接收完整时等待后续分片
-                        Buffer data = UdpFragmentUtil.assemble(datagramSocket, p2pPacket.sender(), p2pPacket.data());
-                        if (data == null) {
-                            return;
-                        }
-                        JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
-                        if (JRPMsgType.UDP_TUNNEL_KEEPALIVE == msgType) {
-                            log.debug("发送心跳保活消息到内网服务地址：{}", socketAddress);
+                    case UDP: {
+                        verticle = new UDPVerticle(ipv4, datagramSocket, socketAddress, securityService, userProxy);
+                        break;
+                    }
+                    case HTTP_PROXY:
+                    case HTTPS_PROXY:
+                    case SOCKS4:
+                    case SOCKS5:
+                    case SMART_PROXY:
+                        verticle = new ForwardProxyVerticle(ipv4, datagramSocket, socketAddress, securityService, userProxy);
+                        break;
+                    default:
+                        throw new IllegalStateException("不支持穿透类型：" + serviceType.name() + "！");
+                }
+                vertx.deployVerticle(verticle)
+                        .onSuccess(id -> {
+                            //保存部署ID，WebSocket关闭时卸载Verticle
+                            verticleDeploymentIdMap.put(userProxy.getLocal_port(), id);
+                            log.info("发送心跳到内网服务：{}", socketAddress);
                             //内网可能收到也可能收不到，取决于网络类型
                             datagramSocket.send(KEEP_ALIVE_BUFFER, socketAddress.port(), socketAddress.host());
-                        } else {
-                            log.info("收到来自内网服务地址[{}]的数据", p2pPacket.sender());
-                            //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
-                            //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
-                            //外网访问端口，整数，比如1024
-                            Integer remotePort = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN).getUnsignedShort(0);
-                            //int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
-                            //clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
-                            Integer requestId = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN).getInt(0);
-                            //获取消息标识：代理端口+请求id
-                            Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN);
-                            Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
-                            verticle.backData(msgType, msgId, requestId, realData);
-                        }
-                    });
-                }
-            });
-            //发送UDP打洞请求到信令服务器
-            log.info("发送UDP打洞请求到信令服务器[{}:{}]", registerHost, registerPort);
-            byte[] remotePortByte = PortConverter.getRemotePortByte(userProxy.getRemote_port());
-            datagramSocket.send(Buffer.buffer().appendByte(JRPMsgType.UDP_TUNNEL_REQUEST.getCode()).appendBytes(remotePortByte),
-                    registerPort, registerHost);
+                        })
+                        .onFailure(Throwable::printStackTrace);
+                datagramSocket.handler(p2pPacket -> {
+                    //分片数据重组，未接收完整时等待后续分片
+                    Buffer data = UdpFragmentUtil.assemble(datagramSocket, p2pPacket.sender(), p2pPacket.data());
+                    if (data == null) {
+                        return;
+                    }
+                    JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
+                    if (JRPMsgType.UDP_TUNNEL_KEEPALIVE == msgType) {
+                        //收到内网服务心跳，链路存活，更新心跳时间
+                        p2pLastHeartbeatMap.put(localPort, System.currentTimeMillis());
+                        log.debug("发送心跳到内网服务：{}", socketAddress);
+                        //内网可能收到也可能收不到，取决于网络类型
+                        datagramSocket.send(KEEP_ALIVE_BUFFER, socketAddress.port(), socketAddress.host());
+                    } else {
+                        //收到内网服务数据，链路存活，更新心跳时间
+                        p2pLastHeartbeatMap.put(localPort, System.currentTimeMillis());
+                        log.info("收到来自内网服务地址[{}]的数据", p2pPacket.sender());
+                        //消息前缀为：消息标志符，后面是消息id：即代理端口位数（一位整数1024到49151，4或者5）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
+                        //获取代理端口字符串长度（代理到外网的穿透访问端口，一位整数，比如1024则长度为4,49151则长度为5）
+                        //外网访问端口，整数，比如1024
+                        Integer remotePort = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN).getUnsignedShort(0);
+                        //int clientStrLen = Integer.parseInt(data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN).toString());
+                        //clientAddress = data.getBuffer(JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN, JRPMsgType.TYPE_LEN + 1 + portLen + CLIENT_IP_PORT_LEN + clientStrLen).toString();
+                        Integer requestId = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN).getInt(0);
+                        //获取消息标识：代理端口+请求id
+                        Buffer msgId = data.getBuffer(JRPMsgType.TYPE_LEN, JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN);
+                        Buffer realData = data.getBuffer(JRPMsgType.TYPE_LEN + REMOTE_PORT_LEN + REQUEST_ID_LEN, data.length());
+                        verticle.backData(msgType, msgId, requestId, realData);
+                    }
+                });
+            }
+        });
+        //发送UDP打洞请求到信令服务器
+        sendHolePunchRequest(userProxy, datagramSocket);
+    }
+
+    /**
+     * 发送UDP打洞请求到信令服务器
+     *
+     * @param userProxy      用户端P2P配置
+     * @param datagramSocket 打洞DatagramSocket
+     */
+    private void sendHolePunchRequest(UserProxy userProxy, DatagramSocket datagramSocket) {
+        log.info("发送UDP打洞请求到信令服务器[{}:{}]", registerHost, registerPort);
+        byte[] remotePortByte = PortConverter.getRemotePortByte(userProxy.getRemote_port());
+        datagramSocket.send(Buffer.buffer().appendByte(JRPMsgType.UDP_TUNNEL_REQUEST.getCode()).appendBytes(remotePortByte),
+                registerPort, registerHost);
+    }
+
+    /**
+     * 检查用户端P2P心跳超时，超过超时时间未收到内网服务心跳，认为打洞链路失效，触发重新打洞
+     */
+    private void checkP2PHeartbeatTimeout() {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<Integer, Long> entry : p2pLastHeartbeatMap.entrySet()) {
+            Integer localPort = entry.getKey();
+            long timeout = now - entry.getValue();
+            if (timeout > P2P_HEARTBEAT_TIMEOUT) {
+                log.warn("端口[{}]P2P心跳超时（{}ms未收到内网服务心跳），重新打洞！", localPort, timeout);
+                redoHolePunch(localPort);
+            }
+        }
+    }
+
+    /**
+     * 用户端P2P重新打洞：卸载旧Verticle、关闭旧DatagramSocket后重新创建并发送UDP打洞请求
+     *
+     * @param localPort 本地监听端口
+     */
+    private void redoHolePunch(Integer localPort) {
+        synchronized (ProxyClientManager.this) {
+            //卸载并停止用户端P2P穿透Verticle
+            String deploymentId = verticleDeploymentIdMap.remove(localPort);
+            if (deploymentId != null) {
+                log.info("端口[{}]重新打洞，卸载用户端P2P穿透服务[{}]！", localPort, deploymentId);
+                vertx.undeploy(deploymentId).onComplete(r -> {
+                    if (r.failed()) {
+                        log.error("停止用户端P2P穿透服务[{}]失败：{}", localPort, r.cause().getMessage(), r.cause());
+                    }
+                });
+            }
+            //关闭旧DatagramSocket（打洞未成功时无Verticle，需在此关闭；DatagramSocket#close为幂等操作，重复关闭安全）
+            DatagramSocket oldSocket = userP2PUdpSocketMap.remove(localPort);
+            if (oldSocket != null) {
+                log.info("端口[{}]重新打洞，关闭旧DatagramSocket！", localPort);
+                oldSocket.close();
+            }
+            UserProxy userProxy = userProxyMap.get(localPort);
+            if (userProxy == null) {
+                log.warn("未找到端口[{}]对应的用户端P2P配置，无法重新打洞！", localPort);
+                return;
+            }
+            //重新创建DatagramSocket并发送UDP打洞请求
+            createUserP2PSocket(userProxy);
         }
     }
 
     /**
      * 收到P2P用户端数据，处理P2P穿透数据
      *
-     * @param packet
+     * @param datagramSocket UDP socket
+     * @param packet         数据包
      */
     private void receiveP2PData(DatagramSocket datagramSocket, DatagramPacket packet) {
         //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为

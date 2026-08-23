@@ -27,6 +27,10 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
     public static final String CERTIFICATE_UNKNOWN = "certificate_unknown";
     public static final String AUTHORIZATION = "Authorization";
     public static final String X_REAL_IP = "X-Real-IP";
+    /**
+     * 本地TCP监听服务
+     */
+    private NetServer server;
 
     public TCPVerticle(String ipv4, DatagramSocket serverSocket, SocketAddress socketAddress, SecurityService securityService, UserProxy clientProxy) {
         super(ipv4, serverSocket, socketAddress, securityService, clientProxy);
@@ -45,7 +49,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             options.setSsl(true);
             options.setKeyCertOptions(securityService.getKeyCertOptions());
         }
-        NetServer server = this.vertx.createNetServer(options);
+        server = this.vertx.createNetServer(options);
         boolean httpFlag = clientProxy.getType() == ServiceType.HTTP || clientProxy.getType() == ServiceType.HTTPS;
         // 处理连接请求
         server.connectHandler(clientSocket -> {
@@ -162,6 +166,10 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
 
     @Override
     public void stop() throws Exception {
+        log.info("关闭端口[{}]下TCP穿透服务并清理缓存！", clientProxy.getLocal_port());
+        if (server != null) {
+            server.close();
+        }
         super.stop();
     }
 }
