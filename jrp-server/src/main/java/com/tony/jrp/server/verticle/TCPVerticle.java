@@ -66,7 +66,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             Handler<Buffer> dataHandler = data -> {
                 receiveDataFlag.set(true);
                 //authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
-                boolean authorized = (!httpFlag && securityService.authorized(host)) || this.cachedRequest(requestId);
+                boolean authorized = securityService.authorized(host) || this.cachedRequest(requestId);
                 //未授权非HTTP请求都屏蔽
                 if (!authorized && !securityService.isHTTPRequest(data)) {
                     log.warn("关闭非HTTP(S)类型未授权请求[{}]！", clientAddress);
@@ -82,7 +82,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                         log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
                         this.cacheRequest(requestId, clientSocket);
                         if (securityService.isHTTPRequest(data)) {
-                            //移除data里面的Authorization: Digest
+                            //移除data里面的Authorization: Digest，包括realm="jrp-auth@example.org"
                             data = securityService.removeHead(data.toString(), AUTHORIZATION);
                             //请求头中添加原始请求IP
                             data = securityService.addHead(data.toString(), X_REAL_IP, clientAddress);

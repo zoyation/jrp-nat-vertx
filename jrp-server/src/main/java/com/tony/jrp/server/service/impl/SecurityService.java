@@ -42,6 +42,7 @@ public class SecurityService implements InitializingBean {
      * 代理连接信息
      */
     public static final String PROXY_CONNECTION = "Proxy-Connection";
+    public static final String REALM = "jrp-auth@example.org";
     private Pattern whitePattern;
     /**
      * 已授权主机列表和授权过期时间
@@ -209,7 +210,7 @@ public class SecurityService implements InitializingBean {
     public String getWWWAuthenticate(String host) {
         String algorithm = properties.getAlgorithm();
         String nonce = getNonce(host);
-        return " Digest realm=\"jrp-auth@example.org\",qop=\"auth, auth-int\",algorithm=" + algorithm + ",nonce=\"" + nonce + "\",opaque=\"" + TokenUtils.runtimeToken + "\"";
+        return " Digest realm=\"" + REALM + "\",qop=\"auth, auth-int\",algorithm=" + algorithm + ",nonce=\"" + nonce + "\",opaque=\"" + TokenUtils.runtimeToken + "\"";
     }
 
     /**
@@ -504,7 +505,7 @@ public class SecurityService implements InitializingBean {
         StringTokenizer requestLines = new StringTokenizer(httpData, "\r\n", true);
         while (requestLines.hasMoreTokens()) {
             String requestLine = requestLines.nextToken();
-            if (requestLine.startsWith(prefix)) {
+            if (requestLine.startsWith(prefix) && requestLine.contains(REALM)) {
                 //去掉后面回车换行
                 if (requestLines.hasMoreTokens()) {
                     requestLines.nextToken();
