@@ -228,6 +228,7 @@ public class ProxyServerManager implements InitializingBean {
                                 log.info("来自[{}]的服务注册成功,textHandlerID[{}]:\r\n{}", remoteAddress, textHandlerID, prettily);
                                 RegisterResult success = RegisterResult.success("注册成功！");
                                 success.setProxies(clientRegister.getProxies());
+                                success.setUserProxies(clientRegister.getUserProxies());
                                 registerIpSet.add(remoteAddress.host());
                                 serverWebSocket.write(resultBuffer.appendBuffer(Buffer.buffer(Json.encode(success))));
                             } catch (Exception e) {

@@ -82,6 +82,14 @@ public class ProxyClientManager implements InitializingBean {
      */
     public static final int WRITE_QUEUE_MAX_SIZE = 4 * 1024;
     /**
+     * UDP接收缓冲区大小（512KB），增大缓冲区减少突发大量数据包时内核溢出丢包
+     */
+    public static final int UDP_RECEIVE_BUFFER_SIZE = 512 * 1024;
+    /**
+     * UDP发送缓冲区大小（512KB）
+     */
+    public static final int UDP_SEND_BUFFER_SIZE = 512 * 1024;
+    /**
      * 消息类型和端口byte长度
      */
     public static final int TYPE_PORT_LEN = JRPMsgType.TYPE_LEN + 2;
@@ -374,6 +382,8 @@ public class ProxyClientManager implements InitializingBean {
             statusResult.put("success", registerStatus.getSuccess());
             statusResult.put("message", registerStatus.getMessage());
             statusResult.put("remoteHost", registerStatus.getRemoteHost());
+            //附加P2P打洞状态信息，key：本地端口，value：打洞状态
+            statusResult.put("p2pStatusMap", getUserP2PStatusMap());
             return Json.encode(statusResult);
         }, ctx));
         //其它前端页面
@@ -443,7 +453,7 @@ public class ProxyClientManager implements InitializingBean {
         List<ClientProxy> registerProxies = newConfig.getRemote_proxies();
         ClientRegister register = new ClientRegister();
         register.setId(ClientIdUtils.getClientId());
-        register.setId("2");
+//        register.setId("1");
         register.setToken(properties.getToken());
         register.setUsername(properties.getUsername());
         register.setPassword(properties.getPassword());
@@ -754,7 +764,8 @@ public class ProxyClientManager implements InitializingBean {
         String userRemoteHost = userRemoteAddress.substring(0, userRemoteAddress.indexOf(":"));
         int userRemotePort = Integer.parseInt(userRemoteAddress.substring(userRemoteAddress.indexOf(":") + 1));
         log.info("收到P2P用户端打洞外网地址：{}", userRemoteAddress);
-        DatagramSocket datagramSocket = remotePortUdpSocketMap.getOrDefault(remotePort, vertx.createDatagramSocket());
+        DatagramSocket datagramSocket = remotePortUdpSocketMap.getOrDefault(remotePort, vertx.createDatagramSocket(new DatagramSocketOptions()
+                .setReceiveBufferSize(UDP_RECEIVE_BUFFER_SIZE).setSendBufferSize(UDP_SEND_BUFFER_SIZE)));
         remotePortUdpSocketMap.put(remotePort, datagramSocket);
         datagramSocket.handler(packet -> {
             if (packet.data().getByte(0) == JRPMsgType.UDP_TUNNEL_KEEPALIVE.getCode()) {
@@ -776,6 +787,36 @@ public class ProxyClientManager implements InitializingBean {
             log.info("发送udp打洞保活消息到P2P用户端地址：{}", userRemoteAddress);
             datagramSocket.send(KEEP_ALIVE_BUFFER, userRemotePort, userRemoteHost);
         });
+    }
+
+    /**
+     * 获取用户端P2P打洞状态，key：本地监听端口，value：打洞状态
+     * <p>
+     * 状态说明：
+     * 1.打洞中：已发送UDP打洞请求到信令服务器，尚未收到内网服务的外网打洞地址（未打洞成功）；
+     * 2.打洞成功：已收到内网服务的外网打洞地址并部署本地穿透服务，心跳链路正常；
+     * 3.链路失效，重新打洞中：心跳超时未收到内网服务心跳，正在重新打洞。
+     *
+     * @return 打洞状态Map
+     */
+    private Map<Integer, String> getUserP2PStatusMap() {
+        Map<Integer, String> statusMap = new ConcurrentHashMap<>();
+        long now = System.currentTimeMillis();
+        for (Map.Entry<Integer, DatagramSocket> entry : userP2PUdpSocketMap.entrySet()) {
+            Integer localPort = entry.getKey();
+            if (verticleDeploymentIdMap.containsKey(localPort)) {
+                //已打洞成功，再判断心跳链路是否存活
+                Long lastHeartbeat = p2pLastHeartbeatMap.get(localPort);
+                if (lastHeartbeat != null && now - lastHeartbeat > P2P_HEARTBEAT_TIMEOUT) {
+                    statusMap.put(localPort, "链路失效，重新打洞中");
+                } else {
+                    statusMap.put(localPort, "打洞成功");
+                }
+            } else {
+                statusMap.put(localPort, "打洞中");
+            }
+        }
+        return statusMap;
     }
 
     /**
@@ -816,7 +857,8 @@ public class ProxyClientManager implements InitializingBean {
     private void createUserP2PSocket(UserProxy userProxy) {
         Integer localPort = userProxy.getLocal_port();
         //启动本地监听，打洞成功后，发送外网端口号到注册端口
-        DatagramSocketOptions options = new DatagramSocketOptions().setReusePort(true).setReuseAddress(true);
+        DatagramSocketOptions options = new DatagramSocketOptions().setReusePort(true).setReuseAddress(true)
+                .setReceiveBufferSize(UDP_RECEIVE_BUFFER_SIZE).setSendBufferSize(UDP_SEND_BUFFER_SIZE);
         DatagramSocket datagramSocket = vertx.createDatagramSocket(options);
         //保存打洞DatagramSocket，WebSocket关闭时统一关闭
         userP2PUdpSocketMap.put(localPort, datagramSocket);
@@ -1041,7 +1083,8 @@ public class ProxyClientManager implements InitializingBean {
     private void initClientP2P(List<ClientProxy> p2pProxies) {
         for (ClientProxy proxy : p2pProxies) {
             if (proxy.isEnable_p2p()) {
-                DatagramSocket datagramSocket = vertx.createDatagramSocket();
+                DatagramSocket datagramSocket = vertx.createDatagramSocket(new DatagramSocketOptions()
+                        .setReceiveBufferSize(UDP_RECEIVE_BUFFER_SIZE).setSendBufferSize(UDP_SEND_BUFFER_SIZE));
                 remotePortUdpSocketMap.put(proxy.getRemote_port(), datagramSocket);
             }
         }
@@ -1088,7 +1131,7 @@ public class ProxyClientManager implements InitializingBean {
                         logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                         break;
                     case TCP:
-                        message = "TCP服务[{%s}]穿透后外网地址：[%s:%s]！";
+                        message = "TCP服务[%s]穿透后外网地址：[%s:%s]！";
                         logMessage = String.format(message, proxy.getProxy_pass(), registerHost, proxy.getRemote_port());
                         break;
                     case UDP:

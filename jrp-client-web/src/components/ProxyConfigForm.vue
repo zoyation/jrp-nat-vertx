@@ -73,7 +73,7 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="proxy_pass" label="本地服务地址">
+                            <el-table-column prop="proxy_pass" label="本地服务地址" width="200">
                                 <template #default="{ row, $index }">
                                     <el-form-item
                                             :prop="`remote_proxies[${$index}].proxy_pass`"
@@ -90,7 +90,7 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="remote_port" label="穿透端口（服务端）" width="220">
+                            <el-table-column prop="remote_port" label="外网端口" width="100">
                                 <template #default="{ row, $index }">
                                     <el-form-item :prop="`remote_proxies[${$index}].remote_port`" :rules="rules.remote_port">
                                         <el-input 
@@ -104,22 +104,12 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column label="是否启用路由规则" width="150" align="center">
+                            <el-table-column label="启用路由规则" width="150" align="center">
                                 <template #default="{ row, $index }">
                                     <el-switch
                                         v-model="row.enable_route_rules"
                                         :disabled="!['HTTP', 'HTTPS'].includes(row.type)"
                                         @change="handleRouteRuleToggle($index)"
-                                        active-text="是"
-                                        inactive-text="否"
-                                    />
-                                </template>
-                            </el-table-column>
-                            <el-table-column label="是否启用P2P" width="130" align="center">
-                                <template #default="{ row }">
-                                    <el-switch
-                                        v-model="row.enable_p2p"
-                                        :disabled="!['HTTP', 'HTTPS', 'TCP', 'UDP'].includes(row.type)"
                                         active-text="是"
                                         inactive-text="否"
                                     />
@@ -139,7 +129,7 @@
                                     <span v-else style="color: #999;">仅HTTP/HTTPS</span>
                                 </template>
                             </el-table-column>
-                            <el-table-column label="穿透外网地址">
+                            <el-table-column label="外网访问地址" width="180" >
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
                                         <a v-if="(row.type=='HTTP'||row.type=='HTTPS')&&row.enable"
@@ -156,6 +146,16 @@
                                     </span>
                                 </template>
                             </el-table-column>
+                            <el-table-column label="启用P2P" align="center">
+                                <template #default="{ row }">
+                                    <el-switch
+                                        v-model="row.enable_p2p"
+                                        :disabled="!['HTTP', 'HTTPS', 'TCP', 'UDP'].includes(row.type)"
+                                        active-text="是"
+                                        inactive-text="否"
+                                    />
+                                </template>
+                            </el-table-column>
                             <el-table-column label="启用状态" width="150" align="center">
                                 <template #default="{ row }">
                                     <el-switch
@@ -165,13 +165,52 @@
                                     />
                                 </template>
                             </el-table-column>
-                            <el-table-column label="操作" width="100">
+                            <el-table-column label="操作" width="300" align="center">
                                 <template #default="{ $index }">
-                                    <el-button
-                                            type="danger"
-                                            @click="removeProxy($index)"
-                                    >删除
-                                    </el-button>
+                                    <div class="row-actions">
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === 0"
+                                                title="置顶"
+                                                @click="moveProxy($index, 'top')"
+                                        >⏫
+                                        </el-button>
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === 0"
+                                                title="上移"
+                                                @click="moveProxy($index, 'up')"
+                                        >⬆
+                                        </el-button>
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === configData.remote_proxies.length - 1"
+                                                title="下移"
+                                                @click="moveProxy($index, 'down')"
+                                        >⬇
+                                        </el-button>
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === configData.remote_proxies.length - 1"
+                                                title="置底"
+                                                @click="moveProxy($index, 'bottom')"
+                                        >⏬
+                                        </el-button>
+                                        <el-button
+                                                type="danger"
+                                                size="small"
+                                                @click="removeProxy($index)"
+                                        >删除
+                                        </el-button>
+                                    </div>
                                 </template>
                             </el-table-column>
                         </el-table>
@@ -180,13 +219,14 @@
                         <el-dialog
                             v-model="routeDialogVisible"
                             :title="'配置路由规则 - ' + (currentRouteProxy ? currentRouteProxy.name : '')"
-                            width="720px"
+                            width="900px"
                             destroy-on-close
+                            class="route-dialog"
                         >
                             <div style="margin-bottom: 12px; color: #666;">
                                 <span>配置不同路径前缀将请求转发到不同本地服务，留空或“/”为默认路由。按最长前缀匹配。</span>
                             </div>
-                            <el-table :data="currentRoutes" style="width: 100%" border size="small">
+                            <el-table ref="routeTableRef" :data="currentRoutes" style="width: 100%" border size="small" max-height="400" class="route-table">
                                 <el-table-column type="index" label="序号" width="60" align="center" />
                                 <el-table-column label="路由路径" width="200">
                                     <template #default="{ row }">
@@ -198,9 +238,47 @@
                                         <el-input v-model="row.proxy_pass" placeholder="如 http://127.0.0.1:8080" />
                                     </template>
                                 </el-table-column>
-                                <el-table-column label="操作" width="80" align="center">
+                                <el-table-column label="操作" width="300" align="center">
                                     <template #default="{ $index }">
-                                        <el-button type="danger" link @click="removeRoute($index)">删除</el-button>
+                                        <div class="row-actions">
+                                            <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === 0"
+                                                title="置顶"
+                                                @click="moveRoute($index, 'top')"
+                                            >⏫
+                                            </el-button>
+                                            <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === 0"
+                                                title="上移"
+                                                @click="moveRoute($index, 'up')"
+                                            >⬆
+                                            </el-button>
+                                            <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === currentRoutes.length - 1"
+                                                title="下移"
+                                                @click="moveRoute($index, 'down')"
+                                            >⬇
+                                            </el-button>
+                                            <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === currentRoutes.length - 1"
+                                                title="置底"
+                                                @click="moveRoute($index, 'bottom')"
+                                            >⏬
+                                            </el-button>
+                                            <el-button type="danger" link size="small" @click="removeRoute($index)">删除</el-button>
+                                        </div>
                                     </template>
                                 </el-table-column>
                             </el-table>
@@ -303,12 +381,66 @@
         routeDialogVisible.value = true;
     }
 
+    const routeTableRef = ref(null);
+
     function addRoute() {
         currentRoutes.value.push({ location: '', proxy_pass: '' });
+        // 等 DOM 渲染完成后滚动表格到底部，让新行可见
+        nextTick(scrollRouteTableToBottom);
+    }
+
+    // 滚动路由表格到底部（多轮次重试，确保滚动生效）
+    function scrollRouteTableToBottom() {
+        let attempts = 0;
+        const doScroll = () => {
+            attempts++;
+            // 通过 class 定位表格滚动容器，兼容 ref 不可用的情况
+            const containers = document.querySelectorAll(
+                '.route-table .el-scrollbar__wrap, .route-table .el-table__body-wrapper'
+            );
+            containers.forEach((c) => {
+                if (c.scrollHeight > c.clientHeight) {
+                    c.scrollTop = c.scrollHeight;
+                }
+            });
+            // 表格滚动容器可能延迟创建，最多重试 5 次
+            if (attempts < 5) {
+                setTimeout(doScroll, 100);
+            }
+        };
+        doScroll();
     }
 
     function removeRoute(index) {
         currentRoutes.value.splice(index, 1);
+    }
+
+    // 通用移动函数：direction 支持 top / up / down / bottom
+    function moveItem(list, index, direction) {
+        const len = list.length;
+        if (len <= 1) {
+            return;
+        }
+        let newIndex = index;
+        if (direction === 'top') {
+            newIndex = 0;
+        } else if (direction === 'up') {
+            newIndex = index - 1;
+        } else if (direction === 'down') {
+            newIndex = index + 1;
+        } else if (direction === 'bottom') {
+            newIndex = len - 1;
+        }
+        if (newIndex < 0 || newIndex >= len || newIndex === index) {
+            return;
+        }
+        const moved = list.splice(index, 1)[0];
+        list.splice(newIndex, 0, moved);
+    }
+
+    // 移动路由规则
+    function moveRoute(index, direction) {
+        moveItem(currentRoutes.value, index, direction);
     }
 
     function confirmRoutes() {
@@ -327,6 +459,7 @@
             }
         }
         configData.remote_proxies[currentRouteProxyIndex.value].routes = currentRoutes.value;
+        changeFlag.value = true;
         routeDialogVisible.value = false;
     }
 
@@ -550,6 +683,12 @@
 
     function removeProxy(index) {
       configData.remote_proxies.splice(index, 1);
+    }
+
+    // 移动代理配置
+    function moveProxy(index, direction) {
+      moveItem(configData.remote_proxies, index, direction);
+      changeFlag.value = true;
     }
 
     // 修改保存函数以包含表单校验
@@ -819,6 +958,14 @@
         width: 100%;
     }
 
+    /* 行操作按钮组 */
+    .row-actions {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+    }
+
     /* 穿透类型说明样式 */
     .proxy-type-section {
         margin-bottom: 0px;
@@ -847,6 +994,29 @@
 
     .proxy-type-description :deep(.el-descriptions__content) {
         color: #606266;
+    }
+
+    /* 路由规则弹窗固定高度 */
+    :global(.route-dialog) {
+        height: 520px;
+        display: flex;
+        flex-direction: column;
+        margin: 5vh auto !important;
+    }
+
+    :global(.route-dialog .el-dialog__header) {
+        flex-shrink: 0;
+    }
+
+    :global(.route-dialog .el-dialog__body) {
+        flex: 1;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    :global(.route-dialog .el-dialog__footer) {
+        flex-shrink: 0;
     }
 
     /* 加载和错误提示样式 */

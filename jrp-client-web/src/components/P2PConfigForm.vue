@@ -43,7 +43,7 @@
                         >
                             <el-table-column type="index" label="序号" width="60" align="center">
                             </el-table-column>
-                            <el-table-column prop="name" label="服务名称">
+                            <el-table-column prop="name" label="名称">
                                 <template #default="{ row, $index }">
                                     <el-form-item
                                             :prop="`user_proxies[${$index}].name`"
@@ -54,13 +54,13 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="type" label="穿透类型" width="180">
+                            <el-table-column prop="type" label="类型" width="180">
                                 <template #default="{ row, $index }">
                                     <el-form-item
                                             :prop="`user_proxies[${$index}].type`"
                                             :rules="rules.type"
                                     >
-                                        <el-select v-model="row.type" size="large" class="table-select" @change="handleTypeChange($index)">
+                                        <el-select v-model="row.type" size="large" class="table-select">
                                               <el-option label="HTTP端口映射" value="HTTP" title="将HTTP请求转发到指定端口"/>
                                               <el-option label="HTTPS端口映射" value="HTTPS" title="将HTTPS请求转发到指定端口"/>
                                               <el-option label="TCP端口映射" value="TCP" title="将TCP流量转发到指定端口"/>
@@ -74,7 +74,7 @@
                                     </el-form-item>
                                 </template>
                             </el-table-column>
-                            <el-table-column prop="remote_port" label="穿透端口（服务端）" width="220">
+                            <el-table-column prop="remote_port" label="外网端口" width="220">
                                 <template #default="{ row, $index }">
                                     <el-form-item :prop="`user_proxies[${$index}].remote_port`" :rules="rules.remote_port">
                                         <el-input 
@@ -83,13 +83,25 @@
                                             :min="0" 
                                             size="large" 
                                             class="table-input"
-                                            placeholder="P2P打洞或转发访问"
+                                            placeholder="P2P打洞和转发访问"
                                         />
                                     </el-form-item>
                                 </template>
                             </el-table-column>
+                            <el-table-column label="打洞状态" width="140" align="center">
+                                <template #default="{ row }">
+                                    <el-tag
+                                            v-if="row.local_port && configData.p2pStatusMap[row.local_port]"
+                                            :type="statusTagType(configData.p2pStatusMap[row.local_port])"
+                                            size="small"
+                                    >
+                                        {{ configData.p2pStatusMap[row.local_port] }}
+                                    </el-tag>
+                                    <el-tag v-else type="info" size="small">未打洞</el-tag>
+                                </template>
+                            </el-table-column>
 
-                            <el-table-column prop="local_port" label="本地端口（P2P直连访问）" width="220">
+                            <el-table-column prop="local_port" label="本地端口" width="220">
                                 <template #default="{ row, $index }">
                                     <el-form-item :prop="`user_proxies[${$index}].local_port`" :rules="rules.local_port">
                                         <el-input
@@ -104,7 +116,7 @@
                                 </template>
                             </el-table-column>
 
-                             <el-table-column label="本地服务地址（打洞成功使用）">
+                             <el-table-column label="打洞成功访问地址">
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.local_port">
                                         <a v-if="(row.type=='HTTP'||row.type=='HTTPS')&&row.enable"
@@ -112,7 +124,7 @@
                                                 target="_blank"
                                                 style="color: #409eff; text-decoration: underline;"
                                         >
-                                            {{row.type.toLowerCase()+'://'}}{{configData.remoteHost+':'+row.remote_port}}
+                                            {{row.type.toLowerCase()+'://'}}{{'127.0.0.1:'+row.local_port}}
                                         </a>
                                         <div v-if="(row.type!='HTTP'&&row.type!='HTTPS')&&row.enable"
                                         >
@@ -121,7 +133,7 @@
                                     </span>
                                 </template>
                              </el-table-column>
-                            <el-table-column label="穿透外网地址（打洞失败使用）">
+                            <el-table-column label="打洞失败访问地址">
                                 <template #default="{ row }">
                                     <span v-if="configData.success&&row.remote_port&&!changeFlag">
                                         <a v-if="(row.type=='HTTP'||row.type=='HTTPS')&&row.enable"
@@ -138,7 +150,7 @@
                                     </span>
                                 </template>
                             </el-table-column>
-                            <el-table-column label="启用状态" width="150" align="center">
+                            <el-table-column label="启用" width="150" align="center">
                                 <template #default="{ row }">
                                     <el-switch
                                         v-model="row.enable"
@@ -147,13 +159,52 @@
                                     />
                                 </template>
                             </el-table-column>
-                            <el-table-column label="操作" width="100">
+                            <el-table-column label="操作" width="300" align="center">
                                 <template #default="{ $index }">
-                                    <el-button
-                                            type="danger"
-                                            @click="removeProxy($index)"
-                                    >删除
-                                    </el-button>
+                                    <div class="row-actions">
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === 0"
+                                                title="置顶"
+                                                @click="moveProxy($index, 'top')"
+                                        >⏫
+                                        </el-button>
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === 0"
+                                                title="上移"
+                                                @click="moveProxy($index, 'up')"
+                                        >⬆
+                                        </el-button>
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === configData.user_proxies.length - 1"
+                                                title="下移"
+                                                @click="moveProxy($index, 'down')"
+                                        >⬇
+                                        </el-button>
+                                        <el-button
+                                                link
+                                                type="primary"
+                                                size="small"
+                                                :disabled="$index === configData.user_proxies.length - 1"
+                                                title="置底"
+                                                @click="moveProxy($index, 'bottom')"
+                                        >⏬
+                                        </el-button>
+                                        <el-button
+                                                type="danger"
+                                                size="small"
+                                                @click="removeProxy($index)"
+                                        >删除
+                                        </el-button>
+                                    </div>
                                 </template>
                             </el-table-column>
                         </el-table>
@@ -198,11 +249,11 @@
 </template>
 
 <script setup>
-    import {ref, reactive, onMounted, nextTick} from 'vue';
+    import {ref, reactive, onMounted, onUnmounted, nextTick} from 'vue';
     import { ElMessage, ElMessageBox } from 'element-plus'
     import apiService from '@/services/api';
 
-    //let statusInterval;
+    let statusInterval;
 
     // 添加表单引用
     const proxyConfigFormRef = ref();
@@ -211,16 +262,19 @@
     onMounted(() => {
       fetchConfig();
       updateStatus();
+      //定时刷新打洞状态
+      statusInterval = setInterval(updateStatus, 5000);
     });
 
-    //onUnmounted(() => {
-    //  clearInterval(statusInterval);
-    //});
+    onUnmounted(() => {
+      clearInterval(statusInterval);
+    });
 
     const configData = reactive({
       success: false,
       message: '',
       remoteHost: '',
+      p2pStatusMap: {},
       user_proxies: [
         {
           name: '',
@@ -233,14 +287,6 @@
       ]
     });
 
-    // 处理穿透类型变化
-    function handleTypeChange(index) {
-        const row = configData.user_proxies[index];
-        // 非HTTP/HTTPS类型时，禁用路由规则
-        if (!['HTTP', 'HTTPS'].includes(row.type)) {
-            row.enable_route_rules = false;
-        }
-    }
     // 添加表单校验规则
     const rules = {
         name: [
@@ -266,7 +312,6 @@
         // 获取当前行的索引
         const index = parseInt(rule.field.match(/\[(\d+)\]/)[1]);
         const currentType = configData.user_proxies[index].type;
-        const enableRouteRules = configData.user_proxies[index].enable_route_rules;
 
         // 如果是代理类型，则proxy_pass可以为空
         const proxyTypes = ['HTTP_PROXY', 'HTTPS_PROXY', 'SOCKS4', 'SOCKS5', 'SMART_PROXY'];
@@ -274,12 +319,7 @@
             return callback(); // 代理类型不需要校验proxy_pass
         }
 
-        // 如果是HTTP/HTTPS类型且启用了路由规则，则proxy_pass可以为空
-        if (['HTTP', 'HTTPS'].includes(currentType) && enableRouteRules) {
-            return callback(); // 启用路由规则时不需要校验proxy_pass
-        }
-
-        // 非代理类型且未启用路由规则必须填写proxy_pass
+        // 非代理类型必须填写proxy_pass
         if (!value) {
             return callback(new Error('请输入服务地址'));
         }
@@ -320,7 +360,22 @@
             configData.success=data.success;
             configData.message=data.message;
             configData.remoteHost=data.remoteHost;
+            if (data.p2pStatusMap) {
+                configData.p2pStatusMap = data.p2pStatusMap;
+            }
         });
+    }
+
+    // 根据打洞状态获取标签类型
+    function statusTagType(status) {
+        if (status === '打洞成功') {
+            return 'success';
+        } else if (status === '打洞中') {
+            return 'warning';
+        } else if (status.includes('失效') || status.includes('重新打洞')) {
+            return 'danger';
+        }
+        return 'info';
     }
 
     async function fetchConfig() {
@@ -379,8 +434,6 @@
         remote_port: null,
         proxy_pass: '',
         routes: [],
-        enable_route_rules: false,
-        enable_p2p: false,
         enable: true
       });
       
@@ -420,6 +473,35 @@
       configData.user_proxies.splice(index, 1);
     }
 
+    // 通用移动函数：direction 支持 top / up / down / bottom
+    function moveItem(list, index, direction) {
+        const len = list.length;
+        if (len <= 1) {
+            return;
+        }
+        let newIndex = index;
+        if (direction === 'top') {
+            newIndex = 0;
+        } else if (direction === 'up') {
+            newIndex = index - 1;
+        } else if (direction === 'down') {
+            newIndex = index + 1;
+        } else if (direction === 'bottom') {
+            newIndex = len - 1;
+        }
+        if (newIndex < 0 || newIndex >= len || newIndex === index) {
+            return;
+        }
+        const moved = list.splice(index, 1)[0];
+        list.splice(newIndex, 0, moved);
+    }
+
+    // 移动代理配置
+    function moveProxy(index, direction) {
+      moveItem(configData.user_proxies, index, direction);
+      changeFlag.value = true;
+    }
+
     // 修改保存函数以包含表单校验
     function saveConfig() {
         proxyConfigFormRef.value.validate((valid) => {
@@ -430,16 +512,6 @@
                     ElMessage({
                         type: 'error',
                         message: portValidationResult.message,
-                    });
-                    return false;
-                }
-
-                // 校验路由规则配置
-                const routeValidationResult = validateRouteRules();
-                if (!routeValidationResult.valid) {
-                    ElMessage({
-                        type: 'error',
-                        message: routeValidationResult.message,
                     });
                     return false;
                 }
@@ -510,23 +582,6 @@
                     valid: false,
                     message: `穿透端口 ${port} 重复，请为每条配置设置不同的端口`
                 };
-            }
-        }
-        return { valid: true, message: '' };
-    }
-
-    // 校验路由规则配置
-    function validateRouteRules() {
-        for (let i = 0; i < configData.user_proxies.length; i++) {
-            const proxy = configData.user_proxies[i];
-            // 如果是HTTP/HTTPS类型且启用了路由规则，必须有至少一条路由规则
-            if (['HTTP', 'HTTPS'].includes(proxy.type) && proxy.enable_route_rules) {
-                if (!proxy.routes || proxy.routes.length === 0) {
-                    return {
-                        valid: false,
-                        message: `第${i + 1}条配置（${proxy.name || '未命名'}）启用了路由规则，请至少添加一条路由规则`
-                    };
-                }
             }
         }
         return { valid: true, message: '' };
@@ -685,6 +740,14 @@
 
     .table-select {
         width: 100%;
+    }
+
+    /* 行操作按钮组 */
+    .row-actions {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
     }
 
     /* 穿透类型说明样式 */
