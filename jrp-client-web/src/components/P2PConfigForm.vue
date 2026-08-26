@@ -17,7 +17,7 @@
                 >
                          <!-- 标题和简介 -->
                         <div class="config-header">
-                            <h3 class="config-title">⚙️ P2P内网访问配置（在外P2P访问内网服务）</h3>
+                            <h3 class="config-title">⚙️ 用户端P2P代理配置（在外P2P访问内网服务）</h3>
                             <div class="header-buttons">
                                 <div class="status-info">
                                     <span class="status-label">服务器连接状态：</span>
