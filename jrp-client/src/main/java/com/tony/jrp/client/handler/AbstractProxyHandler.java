@@ -4,10 +4,10 @@ import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.model.ClientProxy;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.WebSocket;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.Closeable;
+import java.util.function.Consumer;
 
 /**
  * tcp消息处理器
@@ -40,14 +40,14 @@ public abstract class AbstractProxyHandler implements Closeable {
     /**
      * 处理消息
      *
-     * @param registerWebSocket 注册连接
-     * @param msgType           消息类型
-     * @param msgId             消息id
-     * @param clientId          唯一标识
-     * @param proxyPass         代理信息
-     * @param data              数据
+     * @param bufferConsumer 数据处理器
+     * @param msgType        消息类型
+     * @param msgId          消息id
+     * @param clientId       唯一标识
+     * @param proxyPass      代理信息
+     * @param data           数据
      */
-    public void handle(WebSocket registerWebSocket, byte msgType, Buffer msgId, Integer clientId, ClientProxy proxyPass, Buffer data) {
+    public void handle(Consumer<Buffer> bufferConsumer, byte msgType, Buffer msgId, Integer clientId, ClientProxy proxyPass, Buffer data) {
         log.debug("收到外网穿透服务器转发的客户端请求消息[{}]！", clientId);
         try {
             if (msgType == JRPMsgType.CLOSE.getCode()) {
@@ -55,7 +55,7 @@ public abstract class AbstractProxyHandler implements Closeable {
             } else {
                 vertx.executeBlocking(() -> {
                     try {
-                        receiveMsgAndProxy(registerWebSocket, msgId, clientId, proxyPass, data);
+                        receiveMsgAndProxy(bufferConsumer, msgId, clientId, proxyPass, data);
                         return true;
                     } catch (Exception e) {
                         log.error("接受消息失败：{}", e.getMessage(), e);
@@ -88,11 +88,11 @@ public abstract class AbstractProxyHandler implements Closeable {
     /**
      * 接受消息，发请求到内网服务并返回结果
      *
-     * @param webSocket   中转连接
-     * @param msgId       消息id
-     * @param clientId    请求唯一标识（IP+端口）
-     * @param clientProxy 代理配置信息
-     * @param data        数据
+     * @param bufferConsumer 数据处理器
+     * @param msgId          消息id
+     * @param clientId       请求唯一标识（IP+端口）
+     * @param clientProxy    代理配置信息
+     * @param data           数据
      */
-    protected abstract void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data);
+    protected abstract void receiveMsgAndProxy(Consumer<Buffer> bufferConsumer, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data);
 }

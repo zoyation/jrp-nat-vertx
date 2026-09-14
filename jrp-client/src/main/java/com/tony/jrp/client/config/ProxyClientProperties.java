@@ -38,6 +38,10 @@ public class ProxyClientProperties {
      * 穿透成功后，访问认证密码，如果没配置会使用服务端里面配置的认证信息
      */
     private String password;
+    /**
+     * P2P连接重试次数
+     */
+    private Integer p2pReconnectTimes = 3;
 
     /**
      * redis 配置

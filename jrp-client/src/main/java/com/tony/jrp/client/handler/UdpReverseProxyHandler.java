@@ -6,7 +6,6 @@ import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramSocket;
 import io.vertx.core.datagram.DatagramSocketOptions;
-import io.vertx.core.http.WebSocket;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -14,6 +13,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * udp消息处理器
@@ -62,7 +62,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
     }
 
     @Override
-    public void receiveMsgAndProxy(WebSocket webSocket, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
+    public void receiveMsgAndProxy(Consumer<Buffer> bufferConsumer, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
         String originHost = clientProxy.getHost();
         int originPort = clientProxy.getPort();
         DatagramSocket netSocket = datagramSocketMap.get(clientId);
@@ -94,7 +94,7 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
                     netClient.handler(socket -> {
                         log.debug("udp原始服务已返回消息，通过转发消息到外网穿透服务器，返回给请求客户端[{}]！", clientId);
                         //Integer remotePort = proxy.getRemote_port();
-                        webSocket.write(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + socket.data().length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(socket.data()));
+                        bufferConsumer.accept(Buffer.buffer(TYPE_AND_MSG_ID_BYTE_SIZE + socket.data().length()).appendByte(JRPMsgType.RESPONSE.getCode()).appendBuffer(msgId).appendBuffer(socket.data()));
                     });
                     netClient.send(data, originPort, originHost, rs -> {
                         if (rs.succeeded()) {

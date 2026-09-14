@@ -42,6 +42,7 @@ public class SecurityService implements InitializingBean {
      * 代理连接信息
      */
     public static final String PROXY_CONNECTION = "Proxy-Connection";
+    public static final String REALM = "jrp-auth@example.org";
     private Pattern whitePattern;
     /**
      * 已授权主机列表和授权过期时间
@@ -209,7 +210,7 @@ public class SecurityService implements InitializingBean {
     public String getWWWAuthenticate(String host) {
         String algorithm = properties.getAlgorithm();
         String nonce = getNonce(host);
-        return " Digest realm=\"jrp-auth@example.org\",qop=\"auth, auth-int\",algorithm=" + algorithm + ",nonce=\"" + nonce + "\",opaque=\"" + TokenUtils.runtimeToken + "\"";
+        return " Digest realm=\"" + REALM + "\",qop=\"auth, auth-int\",algorithm=" + algorithm + ",nonce=\"" + nonce + "\",opaque=\"" + TokenUtils.runtimeToken + "\"";
     }
 
     /**
@@ -504,7 +505,7 @@ public class SecurityService implements InitializingBean {
         StringTokenizer requestLines = new StringTokenizer(httpData, "\r\n", true);
         while (requestLines.hasMoreTokens()) {
             String requestLine = requestLines.nextToken();
-            if (requestLine.startsWith(prefix)) {
+            if (requestLine.startsWith(prefix) && requestLine.contains(REALM)) {
                 //去掉后面回车换行
                 if (requestLines.hasMoreTokens()) {
                     requestLines.nextToken();
@@ -572,5 +573,31 @@ public class SecurityService implements InitializingBean {
         return "HTTP/1.1 200 Connection Established\r\n" +
                 "Proxy-Agent: JRP-Server\r\n" +
                 "\r\n";
+    }
+
+    /**
+     * 添加额外的头信息
+     *
+     * @param data        请求数据
+     * @param headerName  头信息名称
+     * @param headerValue 头信息值
+     * @return 添加头信息后的数据
+     */
+    public Buffer addHead(String data, String headerName, String headerValue) {
+        // 已存在该头信息则不添加（忽略大小写）
+        if (data.toLowerCase().contains(headerName.toLowerCase() + ":")) {
+            return Buffer.buffer(data);
+        }
+        String headerLine = headerName + ": " + headerValue + "\r\n";
+        // 在请求头与请求体之间的空行前插入，而非追加到报文最后
+        int headerEnd = data.indexOf("\r\n\r\n");
+        if (headerEnd != -1) {
+            data = data.substring(0, headerEnd) + "\r\n" + headerLine + data.substring(headerEnd + 2);
+        } else {
+            // 未找到空行（无请求体），追加到末尾
+            data = data + headerLine;
+        }
+        log.debug("addHead: {}", data);
+        return Buffer.buffer(data);
     }
 }

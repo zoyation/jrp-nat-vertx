@@ -1,7 +1,14 @@
 import axios from 'axios';
 // Create axios instance with base configuration
+
+function resolveApiBase() {
+    const path = window.location.pathname;        // 例如 /jrp-client/web/ 或 /app/jrp-client/web/
+    // 去掉末尾的 /web（及可选斜杠），得到接口前缀
+    const base = path.replace(/\/web\/?$/, '');
+    return base || '/jrp-client';
+}
 const apiClient = axios.create({
-  baseURL: '/jrp-client',
+  baseURL: resolveApiBase(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -50,28 +57,21 @@ apiClient.interceptors.response.use(
 export default {
   // Config related
     getConfig() {
-        return apiClient.get('/config/list');
+        return apiClient.get('/config/listRemoteProxies');
     },
     saveConfig(data) {
-        return apiClient.post('/config/save', data);
+        return apiClient.post('/config/saveRemoteProxies', data);
     },
     status() {
-      return apiClient.get('/config/status');
+      return apiClient.get('/config/statusRemoteProxies');
     },
-    // Example for other endpoints
-    getResource(id) {
-        return apiClient.get(`/resources/${id}`);
+    getUserConfig() {
+        return apiClient.get('/config/listUserProxies');
     },
-
-    createResource(data) {
-        return apiClient.post('/resources', data);
+    saveUserConfig(data) {
+        return apiClient.post('/config/saveUserProxies', data);
     },
-
-    updateResource(id, data) {
-        return apiClient.put(`/resources/${id}`, data);
-    },
-
-    deleteResource(id) {
-        return apiClient.delete(`/resources/${id}`);
+    statusUser() {
+      return apiClient.get('/config/statusUserProxies');
     }
 };

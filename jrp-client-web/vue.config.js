@@ -7,20 +7,18 @@ console.log('Using API URL:', API_URL)
 
 module.exports = defineConfig({
   transpileDependencies: true,
-  publicPath: '/jrp-client/web',
+  publicPath: 'auto',
   outputDir: '../jrp-client/src/main/resources/dist',
   devServer: {
     host: '0.0.0.0',
     port: 0,
     proxy: {
-      '/jrp-client': {
+      '/config': {
         target: API_URL,
         changeOrigin: true,
-        pathRewrite: {
-          '^/jrp-client': ''
-        },
         logLevel: 'debug' // 启用代理调试日志
       }
     }
   }
-})
+ }
+)

@@ -30,6 +30,16 @@ public class PortConverter {
         return ByteBuffer.wrap(portBytes).order(ByteOrder.BIG_ENDIAN).getShort() & 0xFFFF;
     }
 
+    /**
+     * 获取远程端口的字节数组
+     *
+     * @param remotePort 远程端口
+     * @return 远程端口的字节数组
+     */
+    public static byte[] getRemotePortByte(int remotePort) {
+        return ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
+    }
+
     public static void main(String[] args) {
         // 测试常见端口
         int[] testPorts = {80, 443, 1080, 8080, 25565, 65535};

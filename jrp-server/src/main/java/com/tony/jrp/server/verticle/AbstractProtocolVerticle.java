@@ -16,9 +16,9 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
     /**
-     * 读写超时时间，单位秒
+     * 读写超时时间，单位秒，5分钟
      */
-    public static final int IDLE_TIMEOUT = 10;
+    public static final int IDLE_TIMEOUT = 300;
     /**
      * 数据大小，默认256KB
      */

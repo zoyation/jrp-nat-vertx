@@ -2,24 +2,24 @@ package com.tony.jrp.server.service.impl;
 
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
-import com.tony.jrp.common.utils.PortChecker;
 import com.tony.jrp.server.service.ITraversalService;
+import com.tony.jrp.server.util.TraversalUtil;
 import com.tony.jrp.server.verticle.RegisterTraversalVerticle;
 import io.vertx.core.Future;
-import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.ServerWebSocket;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+
+import static com.tony.jrp.server.util.TraversalUtil.MAX_PORT;
+import static com.tony.jrp.server.util.TraversalUtil.MIN_PORT;
 
 /**
  * 穿透服务初始化控制类
@@ -28,14 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Service
 @Slf4j
 public class TraversalServiceImpl implements ITraversalService {
-    /**
-     * 允许穿透的最小端口
-     */
-    public static final int MIN_PORT = 1024;
-    /**
-     * 允许穿透的最大端口49151
-     */
-    public static final int MAX_PORT = 49151;
+
     @Autowired
     protected Vertx vertx;
     /**
@@ -49,86 +42,52 @@ public class TraversalServiceImpl implements ITraversalService {
     private final Map<String, RegisterTraversalVerticle> verticleMap = new ConcurrentHashMap<>();
 
     @Override
-    public synchronized Future<Boolean> start(ClientRegister clientRegister, ServerWebSocket webSocket) {
-        List<ClientProxy> proxies = clientRegister.getProxies();
-        return vertx.executeBlocking(() -> {
-            //停止上次的代理
-            verticleMap.entrySet().removeIf(entry -> {
-                boolean remove = entry.getValue().getClientRegister().getId().equals(clientRegister.getId());
-                if (remove) {
-                    try {
-                        vertx.undeploy(entry.getValue().deploymentID());
-                    } catch (Exception e) {
-                        log.error("取消代理异常：{}", e.getMessage(), e);
-                    }
-                }
-                return remove;
-            });
-            //进行端口检查，如果端口被占用了，提示不能使用
-            List<String> usedPort = new ArrayList<>();
-            for (ClientProxy clientProxy : proxies) {
-                if (clientProxy.getRemote_port() < MIN_PORT || clientProxy.getRemote_port() > MAX_PORT || !PortChecker.isUsable(clientProxy.getRemote_port())) {
-                    usedPort.add(String.valueOf(clientProxy.getRemote_port()));
-                }
-            }
-            if (!usedPort.isEmpty()) {
-                throw new IllegalArgumentException("端口[" + String.join(",", usedPort) + "]已被使用，请使用" + MIN_PORT + "到" + MAX_PORT + "中其它端口！");
-            } else {
-                CountDownLatch countDownLatch = new CountDownLatch(1);
-                AtomicBoolean result = new AtomicBoolean();
-                try {
-                    final RegisterTraversalVerticle verticle = new RegisterTraversalVerticle(clientRegister, webSocket, securityService);
-                    verticleMap.put(webSocket.textHandlerID(), verticle);
-                    vertx.deployVerticle(verticle).onSuccess(id -> {
-                        result.set(true);
-                        countDownLatch.countDown();
-                    }).onFailure(e -> {
-                        log.error("内网穿透代理异常：{}", e.getMessage(), e);
-                        result.set(false);
-                        countDownLatch.countDown();
-                    });
-                } catch (Exception e) {
-                    log.error("初始化内网穿透代理异常：{}", e.getMessage(), e);
-                    result.set(false);
-                    countDownLatch.countDown();
-                }
-                try {
-                    boolean countDown = countDownLatch.await(10, TimeUnit.SECONDS);
-                    if (!countDown) {
-                        log.error("初始化内网穿透代理超时！");
-                    }
-                    result.set(countDown);
-                } catch (Exception e) {
-                    result.set(false);
-                }
-                return result.get();
-            }
-        });
+    public Future<String> start(ClientRegister clientRegister, ServerWebSocket webSocket) {
+        List<ClientProxy> proxies = clientRegister.getProxies().stream().filter(ClientProxy::isEnable).collect(Collectors.toList());
+        //停止上次的代理
+        Optional<Map.Entry<String, RegisterTraversalVerticle>> exist = verticleMap.entrySet().stream()
+                .filter(entry -> entry.getValue().getClientRegister().getId().equals(clientRegister.getId()))
+                .findFirst();
+        if (exist.isPresent()) {
+            RegisterTraversalVerticle value = exist.get().getValue();
+            verticleMap.remove(exist.get().getKey());
+            log.info("取消代理：{}", exist.get().getKey());
+            return vertx.undeploy(value.deploymentID()).compose(v ->
+                    deployVerticle(clientRegister, webSocket, proxies)
+            );
+        } else {
+            return deployVerticle(clientRegister, webSocket, proxies);
+        }
+    }
+
+    /**
+     * 部署穿透服务
+     *
+     * @param clientRegister 客户端注册信息
+     * @param webSocket      客户端WebSocket连接
+     * @param proxies        代理信息
+     * @return 部署穿透服务结果
+     */
+    private Future<String> deployVerticle(ClientRegister clientRegister, ServerWebSocket webSocket, List<ClientProxy> proxies) {
+        List<String> invalidPorts = TraversalUtil.getInvalidPorts(proxies);
+        if (!invalidPorts.isEmpty()) {
+            throw new IllegalArgumentException("端口[" + String.join(",", invalidPorts) + "]已被使用，请使用" + MIN_PORT + "到" + MAX_PORT + "中其它端口，或让服务器自动分配！");
+        } else {
+            TraversalUtil.allocatePort(proxies);
+            RegisterTraversalVerticle traversalVerticle = new RegisterTraversalVerticle(clientRegister, webSocket, securityService);
+            verticleMap.put(webSocket.textHandlerID(), traversalVerticle);
+            return vertx.deployVerticle(traversalVerticle);
+        }
     }
 
     @Override
-    public Future<String> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
-        Promise<String> promise = Promise.promise();
+    public Future<Void> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
         if (clientProxyList != null) {
             RegisterTraversalVerticle clientReverseProxyVerticle = verticleMap.remove(webSocket.textHandlerID());
-            if (clientReverseProxyVerticle != null) {
-                try {
-                    vertx.undeploy(clientReverseProxyVerticle.deploymentID())
-                            .onSuccess(s -> promise.complete("停止代理成功。"))
-                            .onFailure(t -> {
-                                promise.fail("停止代理失败：" + t.getMessage());
-                                log.error("停止代理失败。", t);
-                            });
-                } catch (Exception e) {
-                    log.error("停止代理异常：{}", e.getMessage(), e);
-                    promise.fail("停止代理异常：" + e.getMessage());
-                }
-            } else {
-                promise.complete("未找到代理信息。");
+            if (clientReverseProxyVerticle != null && vertx.deploymentIDs().contains(clientReverseProxyVerticle.deploymentID())) {
+                return vertx.undeploy(clientReverseProxyVerticle.deploymentID());
             }
-        } else {
-            promise.complete("clientRegister参数为空。");
         }
-        return promise.future();
+        return Future.succeededFuture();
     }
 }

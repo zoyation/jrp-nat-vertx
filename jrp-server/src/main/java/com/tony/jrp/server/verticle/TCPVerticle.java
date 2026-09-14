@@ -4,6 +4,7 @@ import com.tony.jrp.common.enums.JRPMsgType;
 import com.tony.jrp.common.enums.ServiceType;
 import com.tony.jrp.common.model.ClientProxy;
 import com.tony.jrp.common.model.ClientRegister;
+import com.tony.jrp.common.utils.PortConverter;
 import com.tony.jrp.server.service.impl.SecurityService;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
@@ -15,7 +16,6 @@ import io.vertx.core.net.SocketAddress;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -26,8 +26,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
 
     public static final String CERTIFICATE_UNKNOWN = "certificate_unknown";
     public static final String AUTHORIZATION = "Authorization";
-
-    private NetServer server;
+    public static final String X_REAL_IP = "X-Real-IP";
 
     public TCPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
         super(ipv4, serverSocket, securityService, clientRegister, clientProxy);
@@ -36,7 +35,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
     @Override
     public void init() {
         int remotePort = clientProxy.getRemote_port();
-        byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
+        byte[] remotePortByte = PortConverter.getRemotePortByte(remotePort);
         // 创建TCP服务器
         NetServerOptions options = new NetServerOptions();
         options.setIdleTimeout(IDLE_TIMEOUT);
@@ -46,7 +45,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             options.setSsl(true);
             options.setKeyCertOptions(securityService.getKeyCertOptions());
         }
-        server = this.vertx.createNetServer(options);
+        NetServer server = this.vertx.createNetServer(options);
         boolean httpFlag = clientProxy.getType() == ServiceType.HTTP || clientProxy.getType() == ServiceType.HTTPS;
         // 处理连接请求
         server.connectHandler(clientSocket -> {
@@ -67,7 +66,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             Handler<Buffer> dataHandler = data -> {
                 receiveDataFlag.set(true);
                 //authorized：非HTTP请求通过HTTP认证过，或者缓存过请求信息
-                boolean authorized = (!httpFlag && securityService.authorized(host)) || this.cachedRequest(requestId);
+                boolean authorized = securityService.authorized(host) || this.cachedRequest(requestId);
                 //未授权非HTTP请求都屏蔽
                 if (!authorized && !securityService.isHTTPRequest(data)) {
                     log.warn("关闭非HTTP(S)类型未授权请求[{}]！", clientAddress);
@@ -83,8 +82,10 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                         log.debug("客户端[{}-[{}]类型服务访问权限验证通过，转发消息!", clientAddress, clientProxy.getType().name());
                         this.cacheRequest(requestId, clientSocket);
                         if (securityService.isHTTPRequest(data)) {
-                            //移除data里面的Authorization: Digest
+                            //移除data里面的Authorization: Digest，包括realm="jrp-auth@example.org"
                             data = securityService.removeHead(data.toString(), AUTHORIZATION);
+                            //请求头中添加原始请求IP
+                            data = securityService.addHead(data.toString(), X_REAL_IP, clientAddress);
                         }
                         serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
                         if (serverSocket.writeQueueFull()) {
@@ -106,6 +107,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                                 this.cacheRequest(requestId, clientSocket);
                                 //移除data里面的Authorization: Digest
                                 data = securityService.removeHead(data.toString(), AUTHORIZATION);
+                                //请求头中添加原始请求IP
+                                data = securityService.addHead(data.toString(), X_REAL_IP, clientAddress);
                                 serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
                             } else {
                                 log.debug("非HTTP(S)客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);
@@ -140,9 +143,9 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                     serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
                 }
             };
+            clientSocket.exceptionHandler(err -> log.error("客户端[{}]异常：{}！", clientAddress, err.getMessage(), err));
             clientSocket.handler(dataHandler);
             clientSocket.closeHandler(closeHandler);
-            clientSocket.exceptionHandler(err -> log.error("客户端[{}]异常：{}！", clientAddress, err.getMessage(), err));
             boolean authorized = securityService.authorized(host);
             //授权通过，如果是非HTTP、SSH类TCP代理（这儿不能通过NetSocket判断创建连接是不是HTTP请求），才通知客户端初始化。
             //http类型请求创建连接后会马上收到数据；SSH协议请求不会收到数据，需要通知被代理客户端连接后返回数据。延迟判断httpRequestFlag如果为false，判断是ssh等协议连接，通知被代理端初始化。
@@ -213,9 +216,6 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
 
     @Override
     public void stop() throws Exception {
-        log.info("清理端口[{}]下代理和缓存！", clientProxy.getRemote_port());
-        //clientSocketMap.values().forEach(NetSocket::close);
-        server.close();
         super.stop();
     }
 }

@@ -22,6 +22,10 @@ vertx:
     token: 2023202
     #http请求白名单，支持正则，比如"^(/api/)(\\S+)*$"
     whiteUrl:
+    #P2P打洞端口，用于协助NAT打洞
+    p2p-port: 3000
+    #P2P打洞超时时间，单位秒
+    p2p-timeout: 30
 # 日志配置
 logging:
   level:
