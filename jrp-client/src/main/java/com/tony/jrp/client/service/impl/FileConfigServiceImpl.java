@@ -97,7 +97,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
         }
         proxyConfig.setRemote_proxies(list);
         try {
-            saveToFile(getConfigFilePath(), Json.encode(proxyConfig));
+            saveToFile(getConfigFilePath(), Json.encodePrettily(proxyConfig));
             return list.size();
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -156,7 +156,7 @@ public class FileConfigServiceImpl implements IConfigService, InitializingBean {
         }
         proxyConfig.setUser_proxies(list);
         try {
-            saveToFile(getConfigFilePath(), Json.encode(proxyConfig));
+            saveToFile(getConfigFilePath(), Json.encodePrettily(proxyConfig));
             return list.size();
         } catch (IOException e) {
             throw new RuntimeException(e);
