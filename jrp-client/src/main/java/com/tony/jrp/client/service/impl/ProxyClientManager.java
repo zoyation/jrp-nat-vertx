@@ -64,7 +64,7 @@ public class ProxyClientManager implements InitializingBean {
     /**
      * 连接超时1秒
      */
-    public static final int CONNECT_TIMEOUT = 1000;
+    public static final int CONNECT_TIMEOUT = 5000;
     /**
      * 注册超时1秒
      */
@@ -77,6 +77,15 @@ public class ProxyClientManager implements InitializingBean {
      * 缓冲区大小256KB
      */
     public static final int BUFFER_SIZE = 256 * 1024;
+    /**
+     * websocket单帧和单消息最大长度，4MB。
+     * 单个转发帧=消息类型(1字节)+外网端口(2字节)+请求ID(4字节)+代理数据，
+     * 代理数据最大为内网服务单次读取的数据（AbstractProxyHandler#BUFFER_SIZE为2MB），
+     * 因此该值必须大于"最大代理数据+7字节消息头"，否则netty会抛出
+     * CorruptedWebSocketFrameException: Max frame length of xxx has been exceeded 并断开连接。
+     * 需和服务端ProxyServerManager保持一致。
+     */
+    public static final int MAX_WEBSOCKET_FRAME_SIZE = 4 * 1024 * 1024;
     /**
      * 写队列最大长度4 * 1024 * 256 * 1024=1G
      */
@@ -1310,9 +1319,9 @@ public class ProxyClientManager implements InitializingBean {
         options.setConnectTimeout(CONNECT_TIMEOUT);
         options.setIdleTimeout(IDLE_TIMEOUT);
         //设置最大消息长度，4M
-        options.setMaxMessageSize(BUFFER_SIZE);
-        //设置最大帧长度，8M
-        options.setMaxFrameSize(BUFFER_SIZE);
+        options.setMaxMessageSize(MAX_WEBSOCKET_FRAME_SIZE);
+        //设置最大帧长度，4M
+        options.setMaxFrameSize(MAX_WEBSOCKET_FRAME_SIZE);
         //设置ssl
         options.setSsl(this.properties.getSsl());
         options.setTrustAll(true);
