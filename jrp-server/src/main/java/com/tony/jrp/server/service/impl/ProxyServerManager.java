@@ -34,7 +34,10 @@ import java.nio.ByteOrder;
 import java.sql.Timestamp;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.tony.jrp.common.enums.JRPMsgType.TYPE_PORT_LEN;
 
@@ -44,7 +47,21 @@ import static com.tony.jrp.common.enums.JRPMsgType.TYPE_PORT_LEN;
 @Component
 @Slf4j
 public class ProxyServerManager implements InitializingBean {
-    public static final int IDLE_TIMEOUT = 4;
+    /**
+     * 隧道websocket读写空闲超时，单位秒。
+     * 该值过小（曾为4秒）会让scp/ssh这类长连接在一次静默（输入密码、限速、对端卡顿）后就被整条断开并重建；
+     * 死连接改由心跳检测关闭（见MAX_MISSED_PONG），不需要靠这么短的空闲超时来回收。
+     */
+    public static final int IDLE_TIMEOUT = 60;
+    /**
+     * 连续多少次未收到pong才判定隧道失效并关闭，用于回收对端已崩溃/网络中断的死连接。
+     * 取多次而不是一次，避免大流量传输时pong偶发延迟导致误断。
+     */
+    public static final int MAX_MISSED_PONG = 3;
+    /**
+     * 传输数据期间未收到pong是正常现象，该阈值表示最近有数据传输则不计入连续失败。
+     */
+    public static final long ACTIVE_THRESHOLD_MS = TimeUnit.SECONDS.toMillis(10);
     public static final int BUFFER_SIZE = 256 * 1024;
     /**
      * websocket单帧和单消息最大长度，4MB。
@@ -163,6 +180,13 @@ public class ProxyServerManager implements InitializingBean {
         vertxHttpServer.webSocketHandler(serverWebSocket -> {
             SocketAddress remoteAddress = serverWebSocket.remoteAddress();
             String textHandlerID = serverWebSocket.textHandlerID();
+            AtomicLong lastDataTime = new AtomicLong(System.currentTimeMillis());
+            //记录最近的数据收发时间，传输数据期间未收到pong不算连接失效
+            serverWebSocket.frameHandler(frame -> {
+                if (frame.isText() || frame.isBinary()) {
+                    lastDataTime.set(System.currentTimeMillis());
+                }
+            });
             serverWebSocket.handler(buffer -> {
                 Buffer resultBuffer = Buffer.buffer(JRPMsgType.REGISTER_RESULT.codeArray());
                 if (buffer != null && buffer.length() > 0 && buffer.getByte(0) == JRPMsgType.REGISTER.getCode()) {
@@ -183,16 +207,30 @@ public class ProxyServerManager implements InitializingBean {
                             long serverPing = 0;
                             try {
                                 final AtomicBoolean pongReceived = new AtomicBoolean(true);
+                                final AtomicInteger missedPong = new AtomicInteger();
                                 serverWebSocket.pongHandler(pongFrame -> {
                                     log.debug("Pong received:{}", pongFrame.toString());
                                     pongReceived.set(true);
+                                    missedPong.set(0);
                                 });
                                 serverPing = vertx.setPeriodic(PING_DELAY, id -> {
                                     if (pongReceived.get()) {
                                         pongReceived.set(false);
                                         serverWebSocket.writePing(Buffer.buffer("server ping"));
                                     } else {
-                                        log.warn("来自[{}]的websocket连接没有pong返回！", remoteAddress);
+                                        //传输数据期间未收到pong是正常现象，有数据收发时不累计超时
+                                        if (System.currentTimeMillis() - lastDataTime.get() <= ACTIVE_THRESHOLD_MS) {
+                                            missedPong.set(0);
+                                            pongReceived.set(true);
+                                            return;
+                                        }
+                                        //空闲超时放大后，死连接（对端崩溃、网络中断）只能靠心跳发现，连续多次没pong就关闭触发重连
+                                        int missed = missedPong.incrementAndGet();
+                                        log.warn("来自[{}]的websocket连接连续[{}]次没有pong返回！", remoteAddress, missed);
+                                        if (missed >= MAX_MISSED_PONG) {
+                                            log.warn("来自[{}]的websocket连接已失效，关闭连接！", remoteAddress);
+                                            serverWebSocket.close();
+                                        }
                                     }
                                 });
                                 long finalServerPing = serverPing;

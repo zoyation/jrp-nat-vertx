@@ -5,6 +5,7 @@ import com.tony.jrp.client.config.ProxyClientProperties;
 import com.tony.jrp.client.handler.AbstractProxyHandler;
 import com.tony.jrp.client.handler.ForwardProxyHandler;
 import com.tony.jrp.client.handler.TcpReverseProxyHandler;
+import com.tony.jrp.client.handler.TunnelFlow;
 import com.tony.jrp.client.handler.UdpReverseProxyHandler;
 import com.tony.jrp.client.service.IConfigService;
 import com.tony.jrp.client.utils.UdpFragmentUtil;
@@ -70,9 +71,16 @@ public class ProxyClientManager implements InitializingBean {
      */
     public static final int REGISTER_TIMEOUT = 1000;
     /**
-     * 空闲超时 10秒
+     * 隧道websocket读写空闲超时，单位秒。
+     * 该值过小（曾为4秒）会让scp/ssh这类长连接在一次静默（输入密码、限速、对端卡顿）后就被整条断开并重建；
+     * 死连接改由心跳检测关闭（见MAX_MISSED_PONG），不需要靠这么短的空闲超时来回收。
      */
-    public static final int IDLE_TIMEOUT = 4;
+    public static final int IDLE_TIMEOUT = 60;
+    /**
+     * 连续多少次未收到pong才判定隧道失效并关闭，用于回收对端已崩溃/网络中断的死连接。
+     * 取多次而不是一次，避免大流量传输时pong偶发延迟导致误断。
+     */
+    public static final int MAX_MISSED_PONG = 3;
     /**
      * 缓冲区大小256KB
      */
@@ -87,9 +95,16 @@ public class ProxyClientManager implements InitializingBean {
      */
     public static final int MAX_WEBSOCKET_FRAME_SIZE = 4 * 1024 * 1024;
     /**
-     * 写队列最大长度4 * 1024 * 256 * 1024=1G
+     * 隧道流量控制协调器，所有转发处理器共用
      */
-    public static final int WRITE_QUEUE_MAX_SIZE = 4 * 1024;
+    private volatile TunnelFlow tunnelFlow;
+    /**
+     * 隧道websocket写队列最大字节数，默认1MB。
+     * Vert.x 4.5 的 writeQueueMaxSize 按字节计（内部映射为netty高低水位size/2、size），不是消息条数。
+     * 需和服务端AbstractProtocolVerticle#WRITE_QUEUE_MAX_SIZE保持一致，
+     * 取值必须大于单次转发的数据块，否则几乎每次写入都会触发pause/drain，吞吐退化成停等。
+     */
+    public static final int WRITE_QUEUE_MAX_SIZE = BUFFER_SIZE * 4;
     /**
      * UDP接收缓冲区大小（512KB），增大缓冲区减少突发大量数据包时内核溢出丢包
      */
@@ -156,6 +171,9 @@ public class ProxyClientManager implements InitializingBean {
     //registerWebSocket为null，未注册
     private volatile WebSocket registerWebSocket = null;
     private volatile Long pingTimerId = null;
+    private final AtomicInteger missedPong = new AtomicInteger(0);
+    private volatile long lastDataTime = System.currentTimeMillis();
+    private static final long ACTIVE_THRESHOLD_MS = TimeUnit.SECONDS.toMillis(10);
     /**
      * 全局UDP分片重组缓存清理定时器id。
      * 分片缓存清理不能只依赖UDPVerticle的定时器（无UDP代理时不会启动），
@@ -276,12 +294,17 @@ public class ProxyClientManager implements InitializingBean {
 
     /**
      * 创建代理处理器
+     *
+     * @param webSocket 隧道websocket，用于转发数据的背压控制；P2P场景传null
      */
-    private void closeAndCreateProxyHandler() throws IOException {
+    private void closeAndCreateProxyHandler(WebSocket webSocket) throws IOException {
         closeProxyHandler();
-        handlerMap.put(ServiceType.TCP, new TcpReverseProxyHandler(vertx));
-        handlerMap.put(ServiceType.UDP, new UdpReverseProxyHandler(vertx));
-        handlerMap.put(ServiceType.SMART_PROXY, new ForwardProxyHandler(vertx));
+        //所有穿透端口共用同一条隧道，背压必须由同一个协调器统一管理（drainHandler是单槽的）
+        TunnelFlow flow = new TunnelFlow(webSocket);
+        this.tunnelFlow = flow;
+        handlerMap.put(ServiceType.TCP, new TcpReverseProxyHandler(vertx, flow));
+        handlerMap.put(ServiceType.UDP, new UdpReverseProxyHandler(vertx, flow));
+        handlerMap.put(ServiceType.SMART_PROXY, new ForwardProxyHandler(vertx, flow));
     }
 
     /**
@@ -590,8 +613,10 @@ public class ProxyClientManager implements InitializingBean {
             // 设置处理pong的回调
             try {
                 final AtomicBoolean pongReceived = new AtomicBoolean(true);
+                final AtomicInteger missedPong = new AtomicInteger();
                 webSocket.pongHandler(pongFrame -> {
                     pongReceived.set(true);
+                    missedPong.set(0);
                     log.debug("Pong received:{}", pongFrame.toString());
                 });
                 webSocket.closeHandler(closeHandler -> {
@@ -618,6 +643,7 @@ public class ProxyClientManager implements InitializingBean {
                     }
                 });
                 webSocket.handler(buffer -> {
+                    lastDataTime = System.currentTimeMillis();
                     //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为{
                     byte msgType = buffer.getByte(0);
                     JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
@@ -634,7 +660,7 @@ public class ProxyClientManager implements InitializingBean {
                                 RegisterResult registerResult = Json.decodeValue(buffer.getBuffer(1, buffer.length()), RegisterResult.class);
                                 if (registerResult.isSuccess()) {
                                     //初始化端口转发穿透服务处理器
-                                    this.closeAndCreateProxyHandler();
+                                    this.closeAndCreateProxyHandler(webSocket);
                                     //启动全局分片重组缓存清理，确保无UDP代理Verticle时分片缓存也能被清理
                                     if (fragmentCleanupTimerId == null) {
                                         fragmentCleanupTimerId = vertx.setPeriodic(1000, id -> UdpFragmentUtil.cleanupExpired());
@@ -662,7 +688,19 @@ public class ProxyClientManager implements InitializingBean {
                                                 //webSocket.close();
                                             });
                                         } else {
-                                            log.warn("未收到服务端[{}]pong消息！", registerWebSocket.remoteAddress().toString());
+                                            //传输数据期间未收到pong是正常现象，有数据收发时不累计超时
+                                            if (System.currentTimeMillis() - lastDataTime <= ACTIVE_THRESHOLD_MS) {
+                                                missedPong.set(0);
+                                                pongReceived.set(true);
+                                                return;
+                                            }
+                                            //空闲超时放大后，死连接（服务端崩溃、网络中断）只能靠心跳发现，连续多次没pong就关闭触发重连
+                                            int missed = missedPong.incrementAndGet();
+                                            log.warn("未收到服务端[{}]pong消息，连续[{}]次！", registerWebSocket.remoteAddress(), missed);
+                                            if (missed >= MAX_MISSED_PONG) {
+                                                log.warn("服务端[{}]隧道连接已失效，关闭连接！", registerWebSocket.remoteAddress());
+                                                webSocket.close();
+                                            }
                                         }
                                     });
                                     log.info("注册成功：\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
@@ -1023,6 +1061,10 @@ public class ProxyClientManager implements InitializingBean {
      */
     private void receiveP2PData(DatagramSocket datagramSocket, DatagramPacket packet) {
         //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为
+        //数据来自P2P的UDP链路，不是隧道websocket：不能因为P2P连接拥塞就去暂停隧道，否则会连累其它端口的中转转发
+        if (tunnelFlow != null) {
+            tunnelFlow.setTunnelSource(false);
+        }
         //分片数据重组，未接收完整时等待后续分片
         Buffer buffer = UdpFragmentUtil.assemble(datagramSocket, packet.sender(), packet.data());
         if (buffer == null) {
@@ -1230,6 +1272,10 @@ public class ProxyClientManager implements InitializingBean {
      * @param msgType    消息类型
      */
     private void receiveData(Integer remotePort, WebSocket webSocket, Buffer buffer, byte msgType) {
+        //数据来自隧道websocket，允许因隧道拥塞而限流
+        if (tunnelFlow != null) {
+            tunnelFlow.setTunnelSource(true);
+        }
         //请求唯一标识,代理端口之后开始取
         Integer requestId = buffer.getBuffer(TYPE_PORT_LEN, TYPE_PORT_REQUEST_ID_LEN).getInt(0);
         //获取消息标识：代理端口+请求id，消息类型之后取

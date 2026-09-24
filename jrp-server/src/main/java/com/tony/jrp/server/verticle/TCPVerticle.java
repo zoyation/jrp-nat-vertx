@@ -28,8 +28,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
     public static final String AUTHORIZATION = "Authorization";
     public static final String X_REAL_IP = "X-Real-IP";
 
-    public TCPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
-        super(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+    public TCPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy, TunnelFlow flow) {
+        super(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
     }
 
     @Override
@@ -39,8 +39,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
         // 创建TCP服务器
         NetServerOptions options = new NetServerOptions();
         options.setIdleTimeout(IDLE_TIMEOUT);
-        options.setReceiveBufferSize(BUFFER_SIZE);
-        options.setSendBufferSize(BUFFER_SIZE);
+        //不设置SO_RCVBUF/SO_SNDBUF，交给内核自动调优（见AbstractProtocolVerticle#BUFFER_SIZE说明）
         if (clientProxy.getType() == ServiceType.HTTPS) {
             options.setSsl(true);
             options.setKeyCertOptions(securityService.getKeyCertOptions());
@@ -49,12 +48,12 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
         boolean httpFlag = clientProxy.getType() == ServiceType.HTTP || clientProxy.getType() == ServiceType.HTTPS;
         // 处理连接请求
         server.connectHandler(clientSocket -> {
-            clientSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
+            //clientSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
             SocketAddress socketAddress = clientSocket.remoteAddress();
             log.debug("[{}] 创建连接!", socketAddress.toString());
             String clientAddress = socketAddress.toString();
-            // 请求唯一标识
-            int requestId = socketAddress.hashCode();
+            // 请求唯一标识，全局自增分配，避免地址哈希碰撞导致两条连接串数据
+            int requestId = nextRequestId();
             //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
             //String msgId = remotePort.toString().length() + remotePort.toString() + clientAddress.length() + clientAddress;
             //代理端口（int转byte,32位，4字节）+请求唯一标识（和clientAddress绑定的int整数,32位，4字节）
@@ -88,14 +87,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                             data = securityService.addHead(data.toString(), X_REAL_IP, clientAddress);
                         }
                         serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
-                        if (serverSocket.writeQueueFull()) {
-                            serverSocket.pause();
-                            clientSocket.pause();
-                            serverSocket.drainHandler(done -> {
-                                serverSocket.resume();
-                                clientSocket.resume();
-                            });
-                        }
+                        //隧道拥塞时暂停读取用户连接，由共享的TunnelFlow统一恢复（drainHandler是单槽的，不能各自注册）
+                        this.flow.pauseUpstream(clientSocket);
                     }
                 } else {
                     //首次访问或者首次验证都需要走HTTP接口
@@ -110,6 +103,7 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                                 //请求头中添加原始请求IP
                                 data = securityService.addHead(data.toString(), X_REAL_IP, clientAddress);
                                 serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length() + data.length()).appendByte(JRPMsgType.RECEIVE.getCode()).appendBuffer(msgId).appendBuffer(data));
+                                this.flow.pauseUpstream(clientSocket);
                             } else {
                                 log.debug("非HTTP(S)客户端[{}]请求验证通过，返回成功提示信息!", clientAddress);
                                 //String notHttpSuccessResponse = securityService.getNotHttpSuccessResponse();
@@ -134,12 +128,15 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
                 }
             };
             Handler<Void> closeHandler = voidHandler -> {
-                log.debug("客户端[{}]连接关闭！", clientAddress);
+                //释放该连接在共享协调器上的登记，避免隧道被永久暂停、或对已关闭连接调用resume
+                this.flow.removeUpstream(clientSocket);
+                this.flow.resumeTunnel(requestId);
+                log.warn("客户端[{}]连接关闭！", clientAddress);
                 if (this.cachedRequest(requestId)) {
                     this.removeCacheAndClose(requestId);
                     //log.warn("客户端连接关闭，丢弃收到的内网代理服务器返回信息，并通知内网服务器断开连接[{}]！", clientAddress);
                     //代理端口位数（一位整数）+代理端口（字符串）+请求唯一标识长度（两位整数）+请求唯一标识（IP+端口）
-                    log.debug("客户端连接关闭，发送关闭连接消息到被代理端[{}]！", clientAddress);
+                    log.warn("发送关闭连接消息到被代理端[{}]！", clientAddress);
                     serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
                 }
             };
@@ -195,13 +192,16 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
             SocketAddress remoteAddress = clientNetSocket.remoteAddress();
             if (JRPMsgType.CLOSE == msgType) {
                 log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接或移除缓存。", remoteAddress);
+                this.flow.resumeTunnel(requestId);
                 this.removeCacheAndClose(requestId);
             } else if (JRPMsgType.RESPONSE == msgType) {
                 log.debug("收到内网代理服务返回数据并返回给客户端[{}]。", remoteAddress);
                 clientNetSocket.write(data);
                 if (clientNetSocket.writeQueueFull()) {
-                    clientNetSocket.pause();
-                    clientNetSocket.drainHandler(done -> clientNetSocket.resume());
+                    //用户侧拥塞：暂停读取隧道，让反压沿TCP传导到内网客户端。
+                    //不能pause用户socket：那不产生任何反压，只会让数据在服务端堆里无限堆积（大文件传输时OOM）。
+                    this.flow.pauseTunnel(requestId);
+                    clientNetSocket.drainHandler(done -> this.flow.resumeTunnel(requestId));
                 }
             } else {
                 log.warn("收到内网代理服务返回数据[{}]，消息类型[{}]不匹配！", remoteAddress, msgType);
@@ -209,6 +209,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
         } else if (JRPMsgType.CLOSE == msgType) {
             log.warn("收到内网代理服务返回的关闭消息，客户端[{}]连接已经失效，不做处理！", requestId);
         } else {
+            //连接已失效，必须释放它对隧道的暂停登记，否则隧道可能被永久暂停
+            this.flow.resumeTunnel(requestId);
             log.warn("收到内网代理服务返回消息，但是客户端[{}]连接已经失效，发送关闭连接消息到内网代理服务！", requestId);
             serverSocket.write(Buffer.buffer(JRPMsgType.TYPE_LEN + msgId.length()).appendByte(JRPMsgType.CLOSE.getCode()).appendBuffer(msgId));
         }

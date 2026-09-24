@@ -42,8 +42,8 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
      */
     private final Object tcpClientLock = new Object();
 
-    public ForwardProxyHandler(Vertx vertx) {
-        super(vertx);
+    public ForwardProxyHandler(Vertx vertx, TunnelFlow flow) {
+        super(vertx, flow);
     }
 
     /**
@@ -58,8 +58,8 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                 if (tcpClient == null) {
                     log.info("初始化复用TCP客户端...");
                     NetClientOptions clientOptions = new NetClientOptions();
-                    clientOptions.setReceiveBufferSize(BUFFER_SIZE);
-                    clientOptions.setSendBufferSize(BUFFER_SIZE);
+//                    clientOptions.setReceiveBufferSize(BUFFER_SIZE);
+//                    clientOptions.setSendBufferSize(BUFFER_SIZE);
                     clientOptions.setTrustAll(true);
                     clientOptions.setConnectTimeout(CONNECT_TIMEOUT);
                     clientOptions.setTcpKeepAlive(true);
@@ -85,6 +85,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
     @Override
     public void closeSocket(Integer clientId) {
         ReadStream<?> socket = socketMap.get(clientId);
+        flow.resumeTunnel(clientId);
         if (socket != null) {
             log.debug("收到断开连接请求，关闭代理连接[{}]。", clientId);
             socketMap.remove(clientId);
@@ -104,12 +105,12 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
     public void receiveMsgAndProxy(Consumer<Buffer> bufferConsumer, Buffer msgId, Integer clientId, ClientProxy clientProxy, Buffer data) {
         ReadStream<?> socket = socketMap.get(clientId);
         if (socket != null) {
-            sendData(data, socket);
+            sendData(clientId, data, socket);
         } else {
             synchronized (socketMap) {
                 socket = socketMap.get(clientId);
                 if (socket != null) {
-                    sendData(data, socket);
+                    sendData(clientId, data, socket);
                 } else {
                     //首次创建TCP/UDP连接，格式：协议类型ProxyProto里枚举值（1字节）+ 地址类型(1字节: 0x01=IPv4, 0x03=域名, 0x04=IPv6) + 地址内容 + 分隔符(1字节) + 端口(2字节)
                     ProxyProto protocol = ProxyProto.getByProto(data.getByte(0));
@@ -204,8 +205,8 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                     if (protocol == ProxyProto.SOCK5_UDP) {
                         // 创建一个TCP客户端，代理转发请求消息到内网并原路返回
                         DatagramSocketOptions clientOptions = new DatagramSocketOptions();
-                        clientOptions.setReceiveBufferSize(BUFFER_SIZE);
-                        clientOptions.setSendBufferSize(BUFFER_SIZE);
+//                        clientOptions.setReceiveBufferSize(BUFFER_SIZE);
+//                        clientOptions.setSendBufferSize(BUFFER_SIZE);
                         DatagramSocket netClient = vertx.createDatagramSocket(clientOptions);
                         netClient.exceptionHandler(e -> {
                             log.error("转发udp消息异常：{}", e.getMessage(), e);
@@ -259,6 +260,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                     proxySocket.closeHandler(ch -> {
                                         if (bufferConsumer != null && socketMap.remove(clientId) != null) {
                                             log.debug("客户端[{}]对应的内容请求关闭！", clientId);
+                                            this.flow.resumeTunnel(clientId);
                                             bufferConsumer.accept(closeBuffer(msgId));
                                         }
                                     });
@@ -276,7 +278,7 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
                                         if (sendData.length() > 0 && !isConnectRequest(sendData)) {
                                             //http、https请求，发送数据
                                             log.debug("http、https请求[{}:{}]，发送数据", targetHost, targetPort);
-                                            sendData(sendData, proxySocket);
+                                            sendData(clientId, sendData, proxySocket);
                                         } else {
                                             //非http请求，返回给代理服务端代表连接成功
                                             log.debug("非http请求[{}:{}]，返回给代理服务端代表连接成功", targetHost, targetPort);
@@ -341,17 +343,20 @@ public class ForwardProxyHandler extends AbstractProxyHandler {
     /**
      * 发送TCP或UDP数据
      *
-     * @param data   数据
-     * @param stream 数据发送对象
+     * @param clientId 请求唯一标识
+     * @param data     数据
+     * @param stream   数据发送对象
      */
-    private static void sendData(Buffer data, ReadStream<?> stream) {
+    private void sendData(Integer clientId, Buffer data, ReadStream<?> stream) {
         if (stream instanceof NetSocket) {
             //TCP数据
             NetSocket netSocket = (NetSocket) stream;
             netSocket.write(data);
             if (netSocket.writeQueueFull()) {
-                netSocket.pause();
-                netSocket.drainHandler((done) -> netSocket.resume());
+                //内网服务侧拥塞：暂停读取隧道，让反压沿TCP传导到服务端；
+                //不能只pause内网socket，那不产生任何反压，只会在客户端堆里无限堆积
+                flow.pauseTunnel(clientId);
+                netSocket.drainHandler(done -> flow.resumeTunnel(clientId));
             }
         } else {
             //udp数据

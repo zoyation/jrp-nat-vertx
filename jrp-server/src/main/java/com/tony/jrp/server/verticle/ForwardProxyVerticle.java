@@ -93,8 +93,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
 
 
     public ForwardProxyVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService,
-                                ClientRegister clientRegister, ClientProxy clientProxy) {
-        super(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                                ClientRegister clientRegister, ClientProxy clientProxy, TunnelFlow flow) {
+        super(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
         int remotePort = clientProxy.getRemote_port();
         remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
     }
@@ -120,6 +120,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
             // 连接关闭处理
             netSocket.closeHandler(voidHandler -> {
                 log.debug("代理客户端[{}]连接关闭！", socketAddress);
+                //释放该连接对隧道的暂停登记，避免隧道被永久暂停
+                flow.resumeTunnel(requestId);
                 boolean cachedRequest = this.cachedRequest(requestId);
                 this.removeCacheAndClose(requestId);
                 if (cachedRequest) {
@@ -161,8 +163,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
         options.setTcpNoDelay(true);
         options.setTcpFastOpen(true);
         //options.setClientAuth(ClientAuth.REQUIRED);
-        options.setReceiveBufferSize(BUFFER_SIZE);
-        options.setSendBufferSize(BUFFER_SIZE);
+        //不设置SO_RCVBUF/SO_SNDBUF，交给内核自动调优（见AbstractProtocolVerticle#BUFFER_SIZE说明）
         return options;
     }
 
@@ -732,7 +733,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
         try {
             // 分配UDP端口
             int udpPort = allocateUdpPort();
-            // 创建UDP服务器
+            // 创建UDP服务器，UDP没有内核自动调优，必须显式设置收发缓冲区
             DatagramSocket socket = vertx.createDatagramSocket(new DatagramSocketOptions().setSendBufferSize(BUFFER_SIZE).setReceiveBufferSize(BUFFER_SIZE));
             socket.exceptionHandler(err ->
                     log.error("UDP连接异常: {}", err.getMessage(), err));
@@ -1011,6 +1012,7 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
             String clientAddress = clientNetSocket.remoteAddress().toString();
             if (JRPMsgType.CLOSE == msgType) {
                 log.debug("收到内网代理服务返回的关闭信息[{}]，关闭连接。", clientAddress);
+                flow.resumeTunnel(requestId);
                 this.removeCacheAndClose(requestId);
             } else if (JRPMsgType.RESPONSE == msgType) {
                 log.debug("收到内网代理服务返回数据并返回给代理客户端[{}]。", clientAddress);
@@ -1061,8 +1063,10 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
                     } else {
                         clientNetSocket.write(data);
                         if (clientNetSocket.writeQueueFull()) {
-                            clientNetSocket.pause();
-                            clientNetSocket.drainHandler(done -> clientNetSocket.resume());
+                            //用户侧拥塞：暂停读取隧道让反压传导到内网客户端。
+                            //不能pause用户socket，那不会产生任何反压，只会在堆里无限堆积数据。
+                            flow.pauseTunnel(requestId);
+                            clientNetSocket.drainHandler(done -> flow.resumeTunnel(requestId));
                         }
                     }
 

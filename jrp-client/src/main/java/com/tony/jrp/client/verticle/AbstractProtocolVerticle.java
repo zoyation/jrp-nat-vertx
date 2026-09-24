@@ -25,9 +25,11 @@ public abstract class AbstractProtocolVerticle<T> extends AbstractVerticle {
      */
     public static final int BUFFER_SIZE = 256 * 1024;
     /**
-     * 写队列最大长度4 * 1024 * 256 * 1024=1G
+     * 写队列最大字节数，默认1MB（BUFFER_SIZE的4倍）。
+     * Vert.x 4.5 的 writeQueueMaxSize 按字节计（内部映射为netty高低水位size/2、size），不是消息条数。
+     * 取值必须大于单次转发的数据块，否则几乎每次写入都会触发pause/drain，吞吐退化成停等。
      */
-    public static final int WRITE_QUEUE_MAX_SIZE = 4 * 1024;
+    public static final int WRITE_QUEUE_MAX_SIZE = BUFFER_SIZE * 4;
     public static final int MSG_BYTE_SIZE = 6;
     /**
      * 代理服务器对应的外网IPV4地址

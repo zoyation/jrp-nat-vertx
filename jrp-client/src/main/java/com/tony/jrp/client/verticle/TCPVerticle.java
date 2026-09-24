@@ -43,8 +43,8 @@ public class TCPVerticle extends AbstractProtocolVerticle<NetSocket> {
         // 创建TCP服务器
         NetServerOptions options = new NetServerOptions();
         options.setIdleTimeout(IDLE_TIMEOUT);
-        options.setReceiveBufferSize(BUFFER_SIZE);
-        options.setSendBufferSize(BUFFER_SIZE);
+//        options.setReceiveBufferSize(BUFFER_SIZE);
+//        options.setSendBufferSize(BUFFER_SIZE);
         if (clientProxy.getType() == ServiceType.HTTPS) {
             options.setSsl(true);
             options.setKeyCertOptions(securityService.getKeyCertOptions());

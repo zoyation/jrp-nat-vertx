@@ -159,8 +159,8 @@ public class ForwardProxyVerticle extends AbstractProtocolVerticle<ProxyRequest>
         options.setTcpNoDelay(true);
         options.setTcpFastOpen(true);
         //options.setClientAuth(ClientAuth.REQUIRED);
-        options.setReceiveBufferSize(BUFFER_SIZE);
-        options.setSendBufferSize(BUFFER_SIZE);
+//        options.setReceiveBufferSize(BUFFER_SIZE);
+//        options.setSendBufferSize(BUFFER_SIZE);
         return options;
     }
 

@@ -43,8 +43,8 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
     private final Map<Integer, Long> requestIdTimestamps = new ConcurrentHashMap<>();
     private static final long REQUEST_TIMEOUT = 30000; // 30秒超时
 
-    public UDPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy) {
-        super(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+    public UDPVerticle(String ipv4, ServerWebSocket serverSocket, SecurityService securityService, ClientRegister clientRegister, ClientProxy clientProxy, TunnelFlow flow) {
+        super(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
     }
 
     @Override
@@ -53,6 +53,7 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
         byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
         // 创建TCP服务器
         DatagramSocketOptions options = new DatagramSocketOptions();
+        //UDP没有内核接收缓冲自动调优，突发流量下缓冲区过小会直接丢包，这里必须显式设置
         options.setReceiveBufferSize(BUFFER_SIZE);
         options.setSendBufferSize(BUFFER_SIZE);
         options.setReusePort(true);

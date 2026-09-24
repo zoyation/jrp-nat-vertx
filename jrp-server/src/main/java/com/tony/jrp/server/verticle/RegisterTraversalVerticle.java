@@ -41,7 +41,6 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      * ”ip:端口“地址总长度数值对应字符串长度。
      */
     public static final int CLIENT_IP_PORT_LEN = 2;
-    public static final int WRITE_QUEUE_MAX_SIZE = 16384;
     public static final int TYPE_AND_MSG_ID_BYTE_SIZE = 9;
     /**
      * 持有和内网代理服务器的连接，收到客户端请求消息后，通知内网代理服务器
@@ -68,6 +67,10 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      * 外网IPv4地址
      */
     private String ipv4;
+    /**
+     * 隧道流量控制协调器，本客户端注册的所有代理端口共用同一条隧道websocket，必须共用一个协调器
+     */
+    private TunnelFlow flow;
 
 
     /**
@@ -91,7 +94,10 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
         String host = serverSocket.headers().get("host");
         this.ipv4 = host.substring(0, host.lastIndexOf(":"));
         log.info("获取到外网IPV4地址：{}", ipv4);
-        serverSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
+        //这里和代理verticle持有的是同一个隧道websocket，写队列上限统一用AbstractProtocolVerticle的常量，避免两个值互相覆盖
+        serverSocket.setWriteQueueMaxSize(AbstractProtocolVerticle.WRITE_QUEUE_MAX_SIZE);
+        //隧道背压协调器：drainHandler是单槽的，必须由同一个协调器统一登记/恢复，否则多个代理端口会互相覆盖
+        this.flow = new TunnelFlow(serverSocket);
         /* 重新设置socket的handler，处理返回消息 */
         serverSocket.handler(data -> {
             JRPMsgType msgType = data.length() > 0 ? JRPMsgType.getByCode(data.getByte(0)) : null;
@@ -161,11 +167,11 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                 case HTTPS:
                 case HTTP:
                 case TCP: {
-                    verticle = new TCPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                    verticle = new TCPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
                     break;
                 }
                 case UDP: {
-                    verticle = new UDPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                    verticle = new UDPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
                     break;
                 }
                 case HTTP_PROXY:
@@ -173,7 +179,7 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                 case SOCKS4:
                 case SOCKS5:
                 case SMART_PROXY:
-                    verticle = new ForwardProxyVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                    verticle = new ForwardProxyVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
                     break;
                 default:
                     throw new IllegalStateException("不支持代理类型：" + clientProxy.getType().name() + "！");
@@ -313,11 +319,11 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
             case HTTPS:
             case HTTP:
             case TCP: {
-                verticle = new TCPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                verticle = new TCPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
                 break;
             }
             case UDP: {
-                verticle = new UDPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                verticle = new UDPVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
                 break;
             }
             case HTTP_PROXY:
@@ -325,7 +331,7 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
             case SOCKS4:
             case SOCKS5:
             case SMART_PROXY:
-                verticle = new ForwardProxyVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy);
+                verticle = new ForwardProxyVerticle(ipv4, serverSocket, securityService, clientRegister, clientProxy, flow);
                 break;
             default:
                 throw new IllegalStateException("不支持代理类型：" + clientProxy.getType().name() + "！");

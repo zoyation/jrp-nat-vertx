@@ -18,6 +18,7 @@ import org.springframework.util.StringUtils;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -396,7 +397,9 @@ public class SecurityService implements InitializingBean {
         boolean result = false;
         if (data != null) {
             Buffer method = data.length() >= maxMethodLen ? data.getBuffer(0, maxMethodLen) : data;
-            result = httpMethods.stream().anyMatch(r -> method.toString().startsWith(r));
+            //用ISO_8859_1按字节解码：SSH/scp等二进制流用UTF-8解码会产生替换字符，既浪费又可能误判
+            String methodStr = method.toString(StandardCharsets.ISO_8859_1);
+            result = httpMethods.stream().anyMatch(r -> methodStr.startsWith(r));
         }
         return result;
     }

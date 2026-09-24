@@ -15,7 +15,12 @@ import java.util.function.Consumer;
 @Slf4j
 public abstract class AbstractProxyHandler implements Closeable {
     public static final int BUFFER_SIZE = 1024 * 1024 * 2;
-    public static final int WRITE_QUEUE_MAX_SIZE = 100;
+    /**
+     * 连接内网真实服务的socket写队列最大字节数，默认1MB。
+     * Vert.x 4.5 的 writeQueueMaxSize 按字节计（内部映射为netty高低水位size/2、size），不是消息条数。
+     * 不能用过小的值（如100），否则几乎每次写入都判定为写队列满而pause，读取内网响应被限流到极小窗口。
+     */
+    public static final int WRITE_QUEUE_MAX_SIZE = 1024 * 1024;
     /**
      * 连接超时时间：5秒
      * NAT穿透场景需要更长的超时时间，考虑：
@@ -32,9 +37,14 @@ public abstract class AbstractProxyHandler implements Closeable {
     public static final int IDLE_TIMEOUT = 300;
     public static final int TYPE_AND_MSG_ID_BYTE_SIZE = 9;
     protected Vertx vertx;
+    /**
+     * 隧道流量控制协调器
+     */
+    protected final TunnelFlow flow;
 
-    public AbstractProxyHandler(Vertx vertx) {
+    public AbstractProxyHandler(Vertx vertx, TunnelFlow flow) {
         this.vertx = vertx;
+        this.flow = flow;
     }
 
     /**
@@ -52,7 +62,8 @@ public abstract class AbstractProxyHandler implements Closeable {
         try {
             if (msgType == JRPMsgType.CLOSE.getCode()) {
                 closeSocket(clientId);
-            } else {
+            } else if (blocking()) {
+                //内部还有阻塞调用（如等待连接建立）的处理器才丢到工作线程
                 vertx.executeBlocking(() -> {
                     try {
                         receiveMsgAndProxy(bufferConsumer, msgId, clientId, proxyPass, data);
@@ -62,10 +73,25 @@ public abstract class AbstractProxyHandler implements Closeable {
                         return false;
                     }
                 });
+            } else {
+                //全异步的处理器直接在event loop执行：
+                //1.省掉线程切换，避免executeBlocking的有序队列成为吞吐瓶颈（scp大文件传输时尤其明显）；
+                //2.同一条连接的消息严格按序处理，不会出现两条消息并发写内网socket导致乱序。
+                receiveMsgAndProxy(bufferConsumer, msgId, clientId, proxyPass, data);
             }
         } catch (Exception e) {
             log.error("接受消息失败：{}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * 是否需要在工作线程执行。
+     * 默认true（保持原有行为）；全异步的处理器（如TCP反向代理）重写返回false，直接在event loop执行。
+     *
+     * @return true-使用executeBlocking
+     */
+    protected boolean blocking() {
+        return true;
     }
 
     /**

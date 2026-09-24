@@ -48,8 +48,8 @@ public class UDPVerticle extends AbstractProtocolVerticle<DatagramPacket> {
         byte[] remotePortByte = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) remotePort).array();
         // 创建TCP服务器
         DatagramSocketOptions options = new DatagramSocketOptions();
-        options.setReceiveBufferSize(BUFFER_SIZE);
-        options.setSendBufferSize(BUFFER_SIZE);
+//        options.setReceiveBufferSize(BUFFER_SIZE);
+//        options.setSendBufferSize(BUFFER_SIZE);
         options.setReusePort(true);
         datagramSocket = vertx.createDatagramSocket(options);
         datagramSocket.exceptionHandler(e -> log.error("UDP异常:{}，移除服务端和客户端缓存!", e.getMessage(), e));

@@ -30,8 +30,8 @@ public class UdpReverseProxyHandler extends AbstractProxyHandler {
     private final Map<Integer, Long> udpReadOrWriteTimeMap = new ConcurrentHashMap<>();
     private final long cacheTimerId;
 
-    public UdpReverseProxyHandler(Vertx vertx) {
-        super(vertx);
+    public UdpReverseProxyHandler(Vertx vertx, TunnelFlow flow) {
+        super(vertx, flow);
         cacheTimerId = vertx.setPeriodic(1000, (id) -> {
             //1秒内没有操作的进行清理
             udpReadOrWriteTimeMap.entrySet().removeIf(entry -> {
