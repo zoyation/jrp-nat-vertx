@@ -180,13 +180,8 @@ public class ProxyServerManager implements InitializingBean {
         vertxHttpServer.webSocketHandler(serverWebSocket -> {
             SocketAddress remoteAddress = serverWebSocket.remoteAddress();
             String textHandlerID = serverWebSocket.textHandlerID();
-            AtomicLong lastDataTime = new AtomicLong(System.currentTimeMillis());
+            //AtomicLong lastDataTime = new AtomicLong(System.currentTimeMillis());
             //记录最近的数据收发时间，传输数据期间未收到pong不算连接失效
-            serverWebSocket.frameHandler(frame -> {
-                if (frame.isText() || frame.isBinary()) {
-                    lastDataTime.set(System.currentTimeMillis());
-                }
-            });
             serverWebSocket.handler(buffer -> {
                 Buffer resultBuffer = Buffer.buffer(JRPMsgType.REGISTER_RESULT.codeArray());
                 if (buffer != null && buffer.length() > 0 && buffer.getByte(0) == JRPMsgType.REGISTER.getCode()) {
@@ -219,18 +214,18 @@ public class ProxyServerManager implements InitializingBean {
                                         serverWebSocket.writePing(Buffer.buffer("server ping"));
                                     } else {
                                         //传输数据期间未收到pong是正常现象，有数据收发时不累计超时
-                                        if (System.currentTimeMillis() - lastDataTime.get() <= ACTIVE_THRESHOLD_MS) {
-                                            missedPong.set(0);
-                                            pongReceived.set(true);
-                                            return;
-                                        }
+//                                        if (System.currentTimeMillis() - lastDataTime.get() <= ACTIVE_THRESHOLD_MS) {
+//                                            missedPong.set(0);
+//                                            pongReceived.set(true);
+//                                            return;
+//                                        }
                                         //空闲超时放大后，死连接（对端崩溃、网络中断）只能靠心跳发现，连续多次没pong就关闭触发重连
                                         int missed = missedPong.incrementAndGet();
                                         log.warn("来自[{}]的websocket连接连续[{}]次没有pong返回！", remoteAddress, missed);
-                                        if (missed >= MAX_MISSED_PONG) {
-                                            log.warn("来自[{}]的websocket连接已失效，关闭连接！", remoteAddress);
-                                            serverWebSocket.close();
-                                        }
+//                                        if (missed >= MAX_MISSED_PONG) {
+//                                            log.warn("来自[{}]的websocket连接已失效，关闭连接！", remoteAddress);
+//                                            serverWebSocket.close();
+//                                        }
                                     }
                                 });
                                 long finalServerPing = serverPing;
