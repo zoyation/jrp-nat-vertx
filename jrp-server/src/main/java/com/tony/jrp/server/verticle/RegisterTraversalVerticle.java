@@ -7,6 +7,8 @@ import com.tony.jrp.common.model.RegisterResult;
 import com.tony.jrp.server.service.impl.SecurityService;
 import com.tony.jrp.server.util.TraversalUtil;
 import io.vertx.core.AbstractVerticle;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.json.Json;
@@ -14,9 +16,7 @@ import io.vertx.core.json.JsonObject;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -62,7 +62,11 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
      * 所有代理Verticle,key：注册端口（1024-49151），用户可注册用于特定服务。
      */
     private final Map<Integer, AbstractProtocolVerticle<?>> verticleMap = new ConcurrentHashMap<>();
-  
+    /**
+     * 记录尚未完成部署的代理Vertx部署Future，防止stop时漏掉正在部署中的verticle
+     */
+    private final Set<Future<String>> pendingDeployments = ConcurrentHashMap.newKeySet();
+
     /**
      * 外网IPv4地址
      */
@@ -337,18 +341,52 @@ public class RegisterTraversalVerticle extends AbstractVerticle {
                 throw new IllegalStateException("不支持代理类型：" + clientProxy.getType().name() + "！");
         }
 
-        vertx.deployVerticle(verticle)
+        Future<String> deployFuture = vertx.deployVerticle(verticle);
+        pendingDeployments.add(deployFuture);
+        deployFuture
                 .onSuccess(id -> {
+                    pendingDeployments.remove(deployFuture);
                     verticleMap.put(remotePort, verticle);
                     log.info("成功部署端口[{}]的代理verticle，类型：{}", remotePort, clientProxy.getType());
                 })
-                .onFailure(t -> log.error("部署端口[{}]的代理verticle失败", remotePort, t));
+                .onFailure(t -> {
+                    pendingDeployments.remove(deployFuture);
+                    log.error("部署端口[{}]的代理verticle失败", remotePort, t);
+                });
     }
 
     @Override
-    public void stop() {
+    public void stop(Promise<Void> stopPromise) {
         String ports = verticleMap.keySet().stream().map(Object::toString).collect(Collectors.joining(","));
         log.info("清理端口[{}]下所有代理缓存！", ports);
-        verticleMap.clear();
+
+        // 1. 先等待所有尚未完成部署的verticle，避免部署完成后又出现新的泄漏
+        // 即使某个部署失败，也不影响继续清理已成功部署的verticle
+        Future<Object> waitPending = pendingDeployments.isEmpty()
+                ? Future.succeededFuture()
+                : Future.all(new ArrayList<>(pendingDeployments)).mapEmpty()
+                .recover(t -> Future.succeededFuture());
+
+        // 2. 等待完成后，显式undeploy所有已部署的代理verticle
+        waitPending
+                .compose(v -> {
+                    List<Future<Void>> undeployFutures = new ArrayList<>();
+                    for (AbstractProtocolVerticle<?> verticle : verticleMap.values()) {
+                        String deploymentId = verticle.deploymentID();
+                        if (deploymentId != null && vertx.deploymentIDs().contains(deploymentId)) {
+                            undeployFutures.add(vertx.undeploy(deploymentId));
+                        }
+                    }
+
+                    verticleMap.clear();
+                    pendingDeployments.clear();
+
+                    if (undeployFutures.isEmpty()) {
+                        return Future.succeededFuture();
+                    }
+                    return Future.all(undeployFutures).mapEmpty();
+                })
+                .onSuccess(v -> stopPromise.complete())
+                .onFailure(stopPromise::fail);
     }
 }

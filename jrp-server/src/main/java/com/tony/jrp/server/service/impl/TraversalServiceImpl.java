@@ -81,12 +81,10 @@ public class TraversalServiceImpl implements ITraversalService {
     }
 
     @Override
-    public Future<Void> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket) {
-        if (clientProxyList != null) {
-            RegisterTraversalVerticle clientReverseProxyVerticle = verticleMap.remove(webSocket.textHandlerID());
-            if (clientReverseProxyVerticle != null && vertx.deploymentIDs().contains(clientReverseProxyVerticle.deploymentID())) {
-                return vertx.undeploy(clientReverseProxyVerticle.deploymentID());
-            }
+    public Future<Void> stop(ServerWebSocket webSocket) {
+        RegisterTraversalVerticle clientReverseProxyVerticle = verticleMap.remove(webSocket.textHandlerID());
+        if (clientReverseProxyVerticle != null && vertx.deploymentIDs().contains(clientReverseProxyVerticle.deploymentID())) {
+            return vertx.undeploy(clientReverseProxyVerticle.deploymentID());
         }
         return Future.succeededFuture();
     }

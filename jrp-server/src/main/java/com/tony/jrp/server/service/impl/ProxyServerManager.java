@@ -235,7 +235,7 @@ public class ProxyServerManager implements InitializingBean {
                                     RegisterInfo remove = registerMap.remove(textHandlerID);
                                     if (remove != null) {
                                         log.warn("websocket[{}]连接关闭，开始停止代理：{}", remoteAddress, remove);
-                                        reverseService.stop(remove.getProxies(), serverWebSocket)
+                                        reverseService.stop(serverWebSocket)
                                                 .onSuccess(proxySuccess -> log.info("停止代理成功[{}]！", remoteAddress))
                                                 .onFailure(err -> log.error("停止代理失败：{}", err.getMessage(), err));
                                         remove.setStatus(STATUS_OFFLINE);
@@ -283,7 +283,7 @@ public class ProxyServerManager implements InitializingBean {
                                     serverWebSocket.close();
                                 }
                                 log.warn("websocket[{}]注册异常，开始停止代理：{}", remoteAddress, clientRegister);
-                                reverseService.stop(clientRegister.getProxies(), serverWebSocket)
+                                reverseService.stop(serverWebSocket)
                                         .onSuccess(proxySuccess -> log.info("停止注册异常代理成功！"))
                                         .onFailure(err -> log.error("停止注册异常代理失败：{}", err.getMessage(), err));
                             }

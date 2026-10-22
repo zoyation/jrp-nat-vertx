@@ -23,8 +23,7 @@ public interface ITraversalService {
     /**
      * 停止代理转发服务
      *
-     * @param clientProxyList 被代理客户端信息
      * @return 停止结果
      */
-    Future<Void> stop(List<ClientProxy> clientProxyList, ServerWebSocket webSocket);
+    Future<Void> stop(ServerWebSocket webSocket);
 }

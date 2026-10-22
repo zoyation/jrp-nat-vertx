@@ -689,18 +689,18 @@ public class ProxyClientManager implements InitializingBean {
                                             });
                                         } else {
                                             //传输数据期间未收到pong是正常现象，有数据收发时不累计超时
-//                                            if (System.currentTimeMillis() - lastDataTime <= ACTIVE_THRESHOLD_MS) {
-//                                                missedPong.set(0);
-//                                                pongReceived.set(true);
-//                                                return;
-//                                            }
+                                            if (System.currentTimeMillis() - lastDataTime <= ACTIVE_THRESHOLD_MS) {
+                                                missedPong.set(0);
+                                                pongReceived.set(true);
+                                                return;
+                                            }
                                             //空闲超时放大后，死连接（服务端崩溃、网络中断）只能靠心跳发现，连续多次没pong就关闭触发重连
                                             int missed = missedPong.incrementAndGet();
                                             log.warn("未收到服务端[{}]pong消息，连续[{}]次！", registerWebSocket.remoteAddress(), missed);
-//                                            if (missed >= MAX_MISSED_PONG) {
-//                                                log.warn("服务端[{}]隧道连接已失效，关闭连接！", registerWebSocket.remoteAddress());
-//                                                webSocket.close();
-//                                            }
+                                            if (missed >= MAX_MISSED_PONG) {
+                                                log.warn("服务端[{}]隧道连接已失效，关闭连接！", registerWebSocket.remoteAddress());
+                                                webSocket.close();
+                                            }
                                         }
                                     });
                                     log.info("注册成功：\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
