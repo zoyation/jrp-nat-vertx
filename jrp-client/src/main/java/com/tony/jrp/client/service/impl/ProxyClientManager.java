@@ -77,11 +77,6 @@ public class ProxyClientManager implements InitializingBean {
      */
     public static final int IDLE_TIMEOUT = 60;
     /**
-     * 连续多少次未收到pong才判定隧道失效并关闭，用于回收对端已崩溃/网络中断的死连接。
-     * 取多次而不是一次，避免大流量传输时pong偶发延迟导致误断。
-     */
-    public static final int MAX_MISSED_PONG = 3;
-    /**
      * 缓冲区大小256KB
      */
     public static final int BUFFER_SIZE = 256 * 1024;
@@ -171,9 +166,6 @@ public class ProxyClientManager implements InitializingBean {
     //registerWebSocket为null，未注册
     private volatile WebSocket registerWebSocket = null;
     private volatile Long pingTimerId = null;
-    private final AtomicInteger missedPong = new AtomicInteger(0);
-    private volatile long lastDataTime = System.currentTimeMillis();
-    private static final long ACTIVE_THRESHOLD_MS = TimeUnit.SECONDS.toMillis(10);
     /**
      * 全局UDP分片重组缓存清理定时器id。
      * 分片缓存清理不能只依赖UDPVerticle的定时器（无UDP代理时不会启动），
@@ -612,11 +604,7 @@ public class ProxyClientManager implements InitializingBean {
             currentWebSocket.set(webSocket);
             // 设置处理pong的回调
             try {
-                final AtomicBoolean pongReceived = new AtomicBoolean(true);
-                final AtomicInteger missedPong = new AtomicInteger();
                 webSocket.pongHandler(pongFrame -> {
-                    pongReceived.set(true);
-                    missedPong.set(0);
                     log.debug("Pong received:{}", pongFrame.toString());
                 });
                 webSocket.closeHandler(closeHandler -> {
@@ -643,7 +631,6 @@ public class ProxyClientManager implements InitializingBean {
                     }
                 });
                 webSocket.handler(buffer -> {
-                    lastDataTime = System.currentTimeMillis();
                     //如果是服务端返回的请求消息buffer前面放的是端口位数1位整数+端口+请求唯一标识长度2位整数+请求唯一标识（IP+端口）；如果是注册结果消息JSON串第一个字符为{
                     byte msgType = buffer.getByte(0);
                     JRPMsgType jrpMsgType = JRPMsgType.getByCode(msgType);
@@ -680,28 +667,11 @@ public class ProxyClientManager implements InitializingBean {
                                     webSocket.setWriteQueueMaxSize(WRITE_QUEUE_MAX_SIZE);
                                     //发送ping
                                     pingTimerId = vertx.setPeriodic(PING_DELAY, id -> {
-                                        if (pongReceived.get()) {
-                                            pongReceived.set(false);
-                                            webSocket.writePing(Buffer.buffer("ping")).timeout(1, TimeUnit.SECONDS).onFailure(cause -> {
-                                                log.error("ping失败：{}", cause.getMessage(), cause);
-                                                //vertx.cancelTimer(id);
-                                                //webSocket.close();
-                                            });
-                                        } else {
-                                            //传输数据期间未收到pong是正常现象，有数据收发时不累计超时
-                                            if (System.currentTimeMillis() - lastDataTime <= ACTIVE_THRESHOLD_MS) {
-                                                missedPong.set(0);
-                                                pongReceived.set(true);
-                                                return;
-                                            }
-                                            //空闲超时放大后，死连接（服务端崩溃、网络中断）只能靠心跳发现，连续多次没pong就关闭触发重连
-                                            int missed = missedPong.incrementAndGet();
-                                            log.warn("未收到服务端[{}]pong消息，连续[{}]次！", registerWebSocket.remoteAddress(), missed);
-                                            if (missed >= MAX_MISSED_PONG) {
-                                                log.warn("服务端[{}]隧道连接已失效，关闭连接！", registerWebSocket.remoteAddress());
-                                                webSocket.close();
-                                            }
-                                        }
+                                        webSocket.writePing(Buffer.buffer("ping")).timeout(1, TimeUnit.SECONDS).onFailure(cause -> {
+                                            log.error("ping失败：{}", cause.getMessage(), cause);
+                                            //vertx.cancelTimer(id);
+                                            //webSocket.close();
+                                        });
                                     });
                                     log.info("注册成功：\n{}", new JsonObject(buffer.getBuffer(1, buffer.length())).encodePrettily());
                                     registerPromise.tryComplete(true);
