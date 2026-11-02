@@ -28,21 +28,30 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.datagram.DatagramPacket;
 import io.vertx.core.datagram.DatagramSocket;
 import io.vertx.core.datagram.DatagramSocketOptions;
+import io.vertx.core.file.AsyncFile;
+import io.vertx.core.file.OpenOptions;
 import io.vertx.core.http.*;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.net.SocketAddress;
 import io.vertx.ext.web.Router;
+import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.StaticHandler;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,11 +59,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 客户端-穿透配置管理
@@ -158,6 +169,11 @@ public class ProxyClientManager implements InitializingBean {
     protected ProxyClientProperties properties;
     @Autowired
     SecurityService securityService;
+    /**
+     * 日志文件名（logback当前输出文件），取自logging.file.name配置，默认log/jrp.log
+     */
+    @Value("${logging.file.name:log/jrp.log}")
+    private String logFileName;
     private HttpServer server;
     private final Object serverLock = new Object();
     private int registerPort;
@@ -410,6 +426,12 @@ public class ProxyClientManager implements InitializingBean {
             statusResult.put("p2pStatusMap", getUserP2PStatusMap());
             return Json.encode(statusResult);
         }, ctx));
+        //查看实时日志（SSE）
+        router.route(HttpMethod.GET, path + "/log/tail").handler(this::handleLogTail);
+        //历史日志文件列表
+        router.route(HttpMethod.GET, path + "/log/list").handler(this::handleLogList);
+        //下载历史日志文件
+        router.route(HttpMethod.GET, path + "/log/download").handler(this::handleLogDownload);
         //其它前端页面
         router.route(HttpMethod.GET, webAndPrefixPath + "/*").handler(dist);
         server.requestHandler(router);
@@ -1343,6 +1365,249 @@ public class ProxyClientManager implements InitializingBean {
         options.setTrustAll(true);
         options.setVerifyHost(false);
         return options;
+    }
+
+    /**
+     * 查看实时日志：通过Server-Sent Events（SSE）实时推送日志文件新增内容。
+     * 连接建立后从当前日志文件末尾开始，后续按秒轮询文件增量并推送，直到客户端断开。
+     *
+     * @param ctx 路由上下文
+     */
+    private void handleLogTail(RoutingContext ctx) {
+        HttpServerResponse response = ctx.response();
+        response.setChunked(true);
+        response.putHeader("Content-Type", "text/event-stream");
+        response.putHeader("Cache-Control", "no-cache");
+        response.putHeader("Connection", "keep-alive");
+        response.putHeader("X-Accel-Buffering", "no");
+        String logFilePath = resolveLogFilePath();
+        // 从当前文件末尾开始，只推送新增内容
+        AtomicLong offset = new AtomicLong(currentFileLength(logFilePath));
+        AtomicBoolean reading = new AtomicBoolean(false);
+        AtomicReference<Long> timerId = new AtomicReference<>();
+        // 先发送一个注释帧，让客户端感知连接已建立
+        response.write(": connected\n\n", "UTF-8");
+
+        long id = vertx.setPeriodic(1000, t -> {
+            if (response.closed()) {
+                cancelTimer(timerId);
+                return;
+            }
+            // 上一次异步读取未完成时跳过本次，避免推送顺序错乱
+            if (!reading.compareAndSet(false, true)) {
+                return;
+            }
+            appendLog(response, logFilePath, offset, () -> {
+                reading.set(false);
+                if (response.closed()) {
+                    cancelTimer(timerId);
+                }
+            });
+        });
+        timerId.set(id);
+
+        response.closeHandler(v -> cancelTimer(timerId));
+    }
+
+    /**
+     * 读取日志文件自offset开始的增量内容并写入响应。
+     * 若文件被轮转或清空（大小小于offset），则从头读取。
+     *
+     * @param response    响应对象
+     * @param logFilePath 日志文件绝对路径
+     * @param offset      当前读取偏移量
+     * @param done        完成回调（无论成功失败都调用）
+     */
+    private void appendLog(HttpServerResponse response, String logFilePath, AtomicLong offset, Runnable done) {
+        vertx.fileSystem().props(logFilePath, props -> {
+            if (props.failed()) {
+                done.run();
+                return;
+            }
+            long size = props.result().size();
+            long start = offset.get();
+            if (size < start) {
+                // 日志文件被轮转或清空，从头读取
+                start = 0;
+            }
+            if (size <= start) {
+                offset.set(start);
+                done.run();
+                return;
+            }
+            // 单次最多读取4MB，防止异常大文件一次性读入内存
+            int length = (int) Math.min(size - start, 4L * 1024 * 1024);
+            long readStart = start;
+            Buffer buffer = Buffer.buffer(length);
+            vertx.fileSystem().open(logFilePath, new OpenOptions().setRead(true), open -> {
+                if (open.failed()) {
+                    done.run();
+                    return;
+                }
+                AsyncFile file = open.result();
+                file.read(buffer, 0, readStart, length, read -> {
+                    file.close();
+                    if (read.failed()) {
+                        done.run();
+                        return;
+                    }
+                    Buffer data = read.result();
+                    offset.set(readStart + data.length());
+                    writeSse(response, data);
+                    done.run();
+                });
+            });
+        });
+    }
+
+    /**
+     * 将日志内容按行封装为SSE data事件写入响应。
+     * SSE规范中不含data:前缀的行会被丢弃，因此逐行加data:前缀，并统一换行符。
+     *
+     * @param response 响应对象
+     * @param data     日志内容
+     */
+    private void writeSse(HttpServerResponse response, Buffer data) {
+        String text = data.toString();
+        text = text.replace("\r\n", "\n").replace('\r', '\n');
+        StringBuilder sb = new StringBuilder(text.length() + 16);
+        for (String line : text.split("\n", -1)) {
+            sb.append("data: ").append(line).append('\n');
+        }
+        sb.append('\n');
+        response.write(sb.toString(), "UTF-8");
+    }
+
+    /**
+     * 获取历史日志文件列表。
+     * 递归扫描日志目录下所有.log文件（含当前文件与按日期归档的历史文件），
+     * 返回相对路径、大小、最后修改时间，按修改时间倒序排列。
+     *
+     * @param ctx 路由上下文
+     */
+    private void handleLogList(RoutingContext ctx) {
+        HttpServerResponse response = ctx.response();
+        try {
+            File logDir = new File(resolveLogDirPath());
+            List<Map<String, Object>> files = new ArrayList<>();
+            if (logDir.isDirectory()) {
+                try (Stream<Path> stream = Files.walk(logDir.toPath())) {
+                    stream.filter(Files::isRegularFile)
+                            .filter(p -> p.getFileName().toString().endsWith(".log"))
+                            .sorted(Comparator.comparingLong((Path p) -> p.toFile().lastModified()).reversed())
+                            .forEach(p -> {
+                                File file = p.toFile();
+                                Map<String, Object> item = new LinkedHashMap<>();
+                                item.put("name", logDir.toPath().relativize(p).toString().replace(File.separatorChar, '/'));
+                                item.put("size", file.length());
+                                item.put("lastModified", file.lastModified());
+                                files.add(item);
+                            });
+                }
+            }
+            response.putHeader("content-type", "application/json;charset=utf-8");
+            response.end(Json.encode(files));
+        } catch (Exception e) {
+            log.error("获取历史日志文件列表失败：{}", e.getMessage(), e);
+            response.setStatusCode(500);
+            response.putHeader("content-type", "application/json;charset=utf-8");
+            response.end(new JsonObject().put("error", "获取历史日志文件列表失败：" + e.getMessage()).encode());
+        }
+    }
+
+    /**
+     * 下载历史日志文件。
+     * 通过file参数指定日志目录下的相对路径，校验路径不越界且为.log文件后返回文件下载。
+     *
+     * @param ctx 路由上下文
+     */
+    private void handleLogDownload(RoutingContext ctx) {
+        HttpServerResponse response = ctx.response();
+        String name = ctx.request().getParam("file");
+        if (!StringUtils.hasText(name)) {
+            response.setStatusCode(400);
+            response.putHeader("content-type", "application/json;charset=utf-8");
+            response.end(new JsonObject().put("error", "缺少file参数").encode());
+            return;
+        }
+        File logDir = new File(resolveLogDirPath());
+        File target = new File(logDir, name);
+        try {
+            String dirPath = logDir.getCanonicalPath();
+            String targetPath = target.getCanonicalPath();
+            // 防止路径穿越，仅允许日志目录内的文件
+            if (!targetPath.startsWith(dirPath + File.separator) && !targetPath.equals(dirPath)) {
+                response.setStatusCode(400);
+                response.putHeader("content-type", "application/json;charset=utf-8");
+                response.end(new JsonObject().put("error", "非法文件路径").encode());
+                return;
+            }
+        } catch (IOException e) {
+            response.setStatusCode(500);
+            response.putHeader("content-type", "application/json;charset=utf-8");
+            response.end(new JsonObject().put("error", "解析文件路径失败：" + e.getMessage()).encode());
+            return;
+        }
+        if (!target.isFile() || !target.getName().endsWith(".log")) {
+            response.setStatusCode(404);
+            response.putHeader("content-type", "application/json;charset=utf-8");
+            response.end(new JsonObject().put("error", "日志文件不存在").encode());
+            return;
+        }
+        // 清理文件名中的引号和换行，防止HTTP头注入
+        String fileName = target.getName().replace("\"", "").replace("\r", "").replace("\n", "");
+        response.putHeader("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
+        response.sendFile(target.getAbsolutePath());
+    }
+
+    /**
+     * 解析日志文件绝对路径，相对路径基于工作目录解析。
+     *
+     * @return 日志文件绝对路径
+     */
+    private String resolveLogFilePath() {
+        String name = logFileName;
+        if (!StringUtils.hasText(name)) {
+            name = "log/jrp.log";
+        }
+        File file = new File(name);
+        if (file.isAbsolute()) {
+            return file.getAbsolutePath();
+        }
+        return new File(System.getProperty("user.dir"), name).getAbsolutePath();
+    }
+
+    /**
+     * 解析日志目录绝对路径（即日志文件所在目录）。
+     *
+     * @return 日志目录绝对路径
+     */
+    private String resolveLogDirPath() {
+        File parent = new File(resolveLogFilePath()).getAbsoluteFile().getParentFile();
+        return parent == null ? System.getProperty("user.dir") : parent.getAbsolutePath();
+    }
+
+    /**
+     * 获取日志文件当前长度，文件不存在时返回0。
+     *
+     * @param logFilePath 日志文件绝对路径
+     * @return 文件长度
+     */
+    private long currentFileLength(String logFilePath) {
+        File file = new File(logFilePath);
+        return file.exists() ? file.length() : 0L;
+    }
+
+    /**
+     * 取消定时器并将引用置空（幂等）。
+     *
+     * @param timerId 定时器id引用
+     */
+    private void cancelTimer(AtomicReference<Long> timerId) {
+        Long id = timerId.getAndSet(null);
+        if (id != null) {
+            vertx.cancelTimer(id);
+        }
     }
 }
 

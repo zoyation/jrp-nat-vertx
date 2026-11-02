@@ -22,6 +22,12 @@
         </template>
         <P2PConfigForm />
       </el-tab-pane>
+      <el-tab-pane name="log">
+        <template #label>
+          <span class="tab-label">📄 客户端日志</span>
+        </template>
+        <LogViewer />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -29,12 +35,14 @@
 <script>
 import ProxyConfigForm from './components/ProxyConfigForm.vue'
 import P2PConfigForm from './components/P2PConfigForm.vue'
+import LogViewer from './components/LogViewer.vue'
 
 export default {
   name: 'App',
   components: {
     ProxyConfigForm,
-    P2PConfigForm
+    P2PConfigForm,
+    LogViewer
   },
   data() {
     return {

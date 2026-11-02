@@ -1,4 +1,5 @@
 import axios from 'axios';
+
 // Create axios instance with base configuration
 
 function resolveApiBase() {
@@ -73,5 +74,15 @@ export default {
     },
     statusUser() {
       return apiClient.get('/config/statusUserProxies');
+    },
+    // 日志相关
+    getLogFiles() {
+        return apiClient.get('/log/list');
+    },
+    getLogTailUrl() {
+        return `${window.location.origin}${apiClient.defaults.baseURL}log/tail`;
+    },
+    getLogDownloadUrl(name) {
+        return `${window.location.origin}${apiClient.defaults.baseURL}log/download?file=${encodeURIComponent(name)}`;
     }
 };
