@@ -37,7 +37,7 @@ public interface IConfigService {
             "      \"type\": \"SMART_PROXY\",\n" +
             "      \"remote_port\": 1080\n" +
             "    }\n" +
-            "  ]\n" +
+            "  ],\n" +
             "  \"user_proxies\":[]\n" +
             "}";
 
